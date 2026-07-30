@@ -18,6 +18,8 @@ import { injectAtmosphere } from '../gfx/atmosphere.js';
 import { assets } from '../gfx/assets.js';
 
 const HEIGHT = 1.80; // both bodies are normalised to this
+const E_LOOK = new THREE.Euler();
+const Q_LOOK = new THREE.Quaternion();
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -88,6 +90,10 @@ class BakedCharacter {
     this.actions = {};
     for (const clip of assets.character.clips) this.actions[clip.name] = this.mixer.clipAction(clip);
     this.current = null;
+    this._headClean = new THREE.Quaternion();
+    this._headHasClean = false;
+    this._lookYaw = 0;
+    this._lookPitch = 0;
     this._play('Idle');
     scene.add(this.root);
   }
@@ -157,13 +163,24 @@ class BakedCharacter {
       }
     }
 
+    // Undo last frame's head-look BEFORE the mixer runs. The bake strips
+    // animation channels that never move, so a clip is not guaranteed to
+    // rewrite the head bone each frame - and adding an offset onto a bone
+    // nothing resets winds the head round and round on the body.
+    if (this.headBone && this._headHasClean) this.headBone.quaternion.copy(this._headClean);
+
     this.mixer.update(dt);
 
-    // The head follows the eyes, gently - after the mixer so it survives.
+    // The head follows the eyes, gently: a smoothed offset applied on top
+    // of whatever the animation posed, and removed again next frame.
     if (this.headBone) {
-      const lookYaw = clamp(wrapAngle(p.yaw - this.facing), -0.9, 0.9);
-      this.headBone.rotation.y += lookYaw * 0.45;
-      this.headBone.rotation.x += -p.pitch * 0.3;
+      this._headClean.copy(this.headBone.quaternion);
+      this._headHasClean = true;
+      const k = 1 - Math.exp(-dt * 6);
+      this._lookYaw += (clamp(wrapAngle(p.yaw - this.facing), -0.9, 0.9) * 0.45 - this._lookYaw) * k;
+      this._lookPitch += (-p.pitch * 0.3 - this._lookPitch) * k;
+      E_LOOK.set(this._lookPitch, this._lookYaw, 0, 'YXZ');
+      this.headBone.quaternion.multiply(Q_LOOK.setFromEuler(E_LOOK));
     }
   }
 
