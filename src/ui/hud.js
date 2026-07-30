@@ -7,14 +7,14 @@ import { clamp, lerp } from '../core/noise.js';
 
 const HELP = [
   ['W A S D', 'walk'],
-  ['Shift', 'run'],
-  ['Ctrl / C', 'crouch'],
+  ['Shift', 'run · fly much faster'],
+  ['Ctrl / C', 'crouch · descend in flight'],
   ['Space', 'jump · swim up · brake'],
   ['Mouse', 'look'],
   ['E / Left click', 'use what is in front of you'],
   ['Q / Right click', 'second action · eat · drink'],
   ['1 – 9 / Wheel', 'choose what you are holding'],
-  ['F', 'drift (and land again) · leave a vehicle'],
+  ['F', 'fly (and land again) · leave a vehicle'],
   ['B', 'raise or drop a bulldozer blade'],
   ['H', 'horn'],
   ['J', 'journal'],
