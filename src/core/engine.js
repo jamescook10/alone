@@ -7,6 +7,8 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { GodRaysPass } from '../gfx/godrays.js';
+import { VolCloudsPass } from '../gfx/volclouds.js';
+import { detailTexture } from '../gfx/materials.js';
 
 /** Final look: vignette, grain, subtle aberration, underwater tint, fade. */
 const GradeShader = {
@@ -121,7 +123,7 @@ export class Engine {
   constructor(canvas, quality = {}) {
     this.canvas = canvas;
     this.quality = Object.assign(
-      { shadows: true, bloom: true, godrays: true, pixelRatio: defaultPixelRatio(), shadowSize: 2048 },
+      { shadows: true, bloom: true, godrays: true, volClouds: true, pixelRatio: defaultPixelRatio(), shadowSize: 2048 },
       quality
     );
 
@@ -141,10 +143,9 @@ export class Engine {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = this.quality.shadows;
-    // Soft-edged shadows: the extra filter taps cost far less than they look
-    // like they should, and hard shadow edges are the single quickest way for
-    // a natural scene to read as "video game".
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // r185 folded the old PCFSoft path into plain PCF (PCFSoftShadowMap is
+    // deprecated and just logs a warning), so PCF is the soft option now.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.setClearColor(0x87a7c4, 1);
     this.renderer.info.autoReset = false;
 
@@ -189,17 +190,29 @@ export class Engine {
   _setupComposer() {
     const size = new THREE.Vector2();
     this.renderer.getSize(size);
-    // Multisampling and supersampling do the same job. If we are already
-    // shading above 1x, spend the budget there instead of on MSAA samples.
-    const pr = this.quality.pixelRatio;
+    // No MSAA: the volumetric cloud pass needs the scene depth as a texture,
+    // and supersampling via pixelRatio plus the adaptive sharpen carry the
+    // anti-aliasing duty instead.
+    this._depthTex = new THREE.DepthTexture(Math.max(2, size.x), Math.max(2, size.y));
     const rt = new THREE.WebGLRenderTarget(Math.max(2, size.x), Math.max(2, size.y), {
       type: THREE.HalfFloatType,
-      samples: pr >= 1.45 ? 0 : pr >= 1.15 ? 2 : 4,
+      samples: 0,
       colorSpace: THREE.LinearSRGBColorSpace,
     });
     this.composer = new EffectComposer(this.renderer, rt);
+    // RenderPass draws the scene into the composer's READ buffer
+    // (renderTarget2), so that is where the depth texture must live - and
+    // only there: if the write buffer carried it too, a pass sampling depth
+    // while rendering into that buffer would be reading its own attachment.
+    this.composer.renderTarget1.depthTexture = null;
+    this.composer.renderTarget2.depthTexture = this._depthTex;
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
+
+    this.volclouds = new VolCloudsPass(this.camera, detailTexture());
+    this.volclouds.depthTexture = this._depthTex;
+    this.volclouds.enabled = this.quality.volClouds;
+    this.composer.addPass(this.volclouds);
 
     // Shafts go in before bloom, so the bright core near the sun gets the
     // same halo treatment as everything else and the two effects fuse.
@@ -229,6 +242,12 @@ export class Engine {
     // rendering the scene at the old buffer size.
     this.composer.setPixelRatio(this.quality.pixelRatio);
     this.composer.setSize(w, h);
+    // The depth texture must track the drawing buffer or the cloud march
+    // reads stale geometry.
+    const pr2 = this.quality.pixelRatio;
+    this._depthTex.image.width = Math.max(2, Math.floor(w * pr2));
+    this._depthTex.image.height = Math.max(2, Math.floor(h * pr2));
+    this._depthTex.needsUpdate = true;
     // Bloom is a wide, soft, low-frequency effect: half resolution is
     // indistinguishable and costs a quarter of the fill rate.
     if (this.bloom) this.bloom.setSize(Math.max(2, w * 0.5), Math.max(2, h * 0.5));
@@ -250,6 +269,7 @@ export class Engine {
     this.sun.castShadow = this.quality.shadows;
     this.bloom.enabled = this.quality.bloom;
     this.godrays.enabled = this.quality.godrays;
+    this.volclouds.enabled = this.quality.volClouds;
     this.resize();
   }
 

@@ -14,6 +14,9 @@ import { Particles } from '../gfx/particles.js';
 import { Player } from '../player/player.js';
 import { Interaction } from '../player/interact.js';
 import { atmo } from '../gfx/atmosphere.js';
+import { GERSTNER_WAVES } from '../gfx/materials.js';
+
+const SHADOW_ANCHOR = new THREE.Vector3();
 
 export class World {
   constructor(engine, seed, opts = {}) {
@@ -79,7 +82,12 @@ export class World {
     this.terrain.update(p.position);
     this.weather.update(dt, p);
     this.sky.update(dt, this.engine.camera, this.weather);
-    this.sky.positionLights(p.position);
+    // Shadows track the ground under the player, not the player: flying at
+    // cloud height with the shadow box centred on you leaves the world below
+    // outside the light camera and drew a dark rectangle on the landscape.
+    const gy = this.terrain.heightAt(p.position.x, p.position.z);
+    SHADOW_ANCHOR.set(p.position.x, Math.min(p.position.y, gy + 40), p.position.z);
+    this.sky.positionLights(SHADOW_ANCHOR);
     this.flora.update(dt);
     this.fire.update(dt);
     this.physics.update(dt);
@@ -103,6 +111,30 @@ export class World {
     this.horizonSea.visible = !p.underwater;
 
     if (this.audio) this.audio.update(dt);
+  }
+
+  /**
+   * CPU mirror of the water vertex shader's Gerstner sum (height only), so
+   * the swimming player bobs on the same swell they can see. Same wave
+   * table, same time uniform, same wind and shore damping.
+   */
+  waveHeightAt(x, z) {
+    const wl = this.terrain.waterAt(x, z);
+    if (wl === -Infinity) return 0;
+    const depth = wl - this.terrain.heightAt(x, z);
+    const shore = Math.max(0, Math.min(1, depth / 2.5));
+    if (shore <= 0.01) return 0;
+    const wind = Math.max(0, Math.min(1.5, atmo.uWindStrength.value));
+    const amp = shore * (0.45 + wind * 0.75);
+    const t = atmo.uTime.value;
+    let h = 0;
+    for (const [dx, dz, L, A] of GERSTNER_WAVES) {
+      const k = (Math.PI * 2) / L;
+      const w = Math.sqrt(9.81 * k);
+      const il = 1 / Math.hypot(dx, dz);
+      h += A * amp * Math.sin(k * (dx * il * x + dz * il * z) + w * t);
+    }
+    return h;
   }
 
   /** A short note added to the journal, shown in the UI. */

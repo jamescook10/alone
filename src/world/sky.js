@@ -91,7 +91,7 @@ vec3 skyRadiance( vec3 dir, vec3 sun ) {
   float mu = clamp( dot( dir, sun ), -1.0, 1.0 );
   // Flatter than 1/(y+0.22): that curve made the zenith a quarter of the
   // horizon's brightness and the top of every daytime frame read as dusk.
-  float airMass = 1.0 / ( y * 0.72 + 0.25 );
+  float airMass = 1.0 / ( y * 0.60 + 0.28 );
   float sunPath = 1.0 / ( max( sun.y, 0.0 ) + 0.085 );
 
   float phaseR = 0.0596831 * ( 1.0 + mu * mu );
@@ -310,6 +310,19 @@ export class Sky {
     this.mesh.renderOrder = -1000;
     engine.scene.add(this.mesh);
 
+    // Environment probe: the same sky shader rendered into a small cubemap
+    // and prefiltered, so every rough or wet surface picks up real sky
+    // reflection that tracks the time of day. Refreshed every couple of
+    // seconds - the sun does not move faster than that.
+    this._envScene = new THREE.Scene();
+    this._envScene.add(new THREE.Mesh(geo, mat));
+    this._envRT = new THREE.WebGLCubeRenderTarget(64, { type: THREE.HalfFloatType });
+    this._envCam = new THREE.CubeCamera(0.1, 50, this._envRT);
+    this._pmrem = new THREE.PMREMGenerator(engine.renderer);
+    this._pmrem.compileCubemapShader();
+    this._envOut = null;
+    this._envT = 0;
+
     this.sunDir = new THREE.Vector3();
     this.moonDir = new THREE.Vector3();
     this.sunColor = new THREE.Color();
@@ -372,8 +385,20 @@ export class Sky {
     this.uniforms.uMoonDir.value.copy(this.moonDir);
 
     if (weather) {
-      this.uniforms.uCloudCover.value = weather.cloudCover;
+      // When the volumetric pass owns the clouds, the sky dome's flat slab
+      // stands down (the cirrus sheet stays - it lives far above the layer).
+      const vc = this.engine.volclouds;
+      const vol = vc && vc.enabled;
+      if (vc) {
+        vc.cover = weather.cloudCover;
+        vc.dark = weather.cloudDark;
+        vc.driftM.x += weather.windDir.x * dt * 9;
+        vc.driftM.y += weather.windDir.y * dt * 9;
+      }
+      this.uniforms.uCloudCover.value = vol ? 0 : weather.cloudCover;
       this.uniforms.uCloudDark.value = weather.cloudDark;
+      this._adaptCover = weather.cloudCover;
+      this._adaptVol = !!vol;
       this.uniforms.uOvercast.value = weather.overcast;
       this.uniforms.uHaze.value = 0.10 + weather.humidity * 0.30 + weather.fog * 0.45;
       this.uniforms.uWind.value.set(weather.windDir.x, weather.windDir.y);
@@ -383,6 +408,7 @@ export class Sky {
       const mieT = saturate(-0.05 + weather.humidity * 0.50 + weather.fog * 1.4 + weather.overcast * 0.40);
       this.mieK = lerp(0.10, 0.46, mieT);
       this.uniforms.uMieK.value = this.mieK;
+      atmo.uMieK.value = this.mieK;
     }
 
     this._computeColors(weather);
@@ -401,6 +427,18 @@ export class Sky {
     atmo.uCloudOff.value.x += (weather ? weather.windDir.x : 1) * drift;
     atmo.uCloudOff.value.y += (weather ? weather.windDir.y : 0.2) * drift;
 
+    this._envT -= dt;
+    if (this._envT <= 0) {
+      this._envT = 2.0;
+      const renderer = this.engine.renderer;
+      this._envCam.update(renderer, this._envScene);
+      const out = this._pmrem.fromCubemap(this._envRT.texture);
+      if (this._envOut) this._envOut.dispose();
+      this._envOut = out;
+      this.engine.scene.environment = out.texture;
+    }
+    this.engine.scene.environmentIntensity = this.uniforms.uUnderwater.value > 0.5 ? 0.08 : 0.5;
+
     if (camera) this.mesh.position.copy(camera.position);
   }
 
@@ -413,7 +451,7 @@ export class Sky {
     const sun = this.sunDir;
     const y = Math.max(dy, -0.1);
     const mu = clamp(dx * sun.x + dy * sun.y + dz * sun.z, -1, 1);
-    const airMass = 1 / (y * 0.72 + 0.25);
+    const airMass = 1 / (y * 0.60 + 0.28);
     const sunPath = 1 / (Math.max(sun.y, 0) + 0.085);
     const phaseR = 0.0596831 * (1 + mu * mu);
     const g = MIE_G;
@@ -537,10 +575,13 @@ export class Sky {
   _adapt(dt) {
     const lum = (c) => c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
     let mid = lum(this.horizonColor) * 0.42 + lum(this.zenithColor) * 0.58;
-    // The colour model doesn't know the cloud slab exists, but the eye does:
-    // a clouded day sky is BRIGHT, and metering as if it were clear blew the
-    // clouds out to one structureless white sheet.
-    mid *= 1 + this.uniforms.uCloudCover.value * 1.2 * this.dayFactor;
+    // The colour model doesn't know clouds exist, but the eye does. The flat
+    // slab renders BRIGHTER than the clear model (meter up or it blows out);
+    // the volumetric deck renders DARKER than it (meter down or midday under
+    // cloud looks like dusk).
+    const cov = this._adaptCover !== undefined ? this._adaptCover : this.uniforms.uCloudCover.value;
+    if (this._adaptVol) mid *= 1 - cov * 0.38 * this.dayFactor;
+    else mid *= 1 + cov * 1.2 * this.dayFactor;
     // Aim brighter by day than by night: a clear daytime sky in a photograph
     // sits well above middle grey. Metering it to 0.44 made mornings dusk.
     const aim = lerp(0.46, 0.64, this.dayFactor);

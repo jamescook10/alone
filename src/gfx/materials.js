@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { atmo, injectAtmosphere, ATMO_PARS, WIND_PARS } from './atmosphere.js';
 import { Noise } from '../core/noise.js';
+import { assets } from './assets.js';
 
 /* ---------------------------------------------------------- textures */
 
@@ -110,12 +111,13 @@ export function makeTerrainMaterial() {
     metalness: 0.0,
     dithering: true,
   });
+  if (assets.terrain) return makeSplatTerrainMaterial(mat, detail);
   injectAtmosphere(mat, {
     key: 'terrain',
     uniforms: { tDetail: { value: detail } },
     vertexPars: /* glsl */ `
-      attribute vec2 aux;
-      varying vec2 vAux;
+      attribute vec4 aux;
+      varying vec4 vAux;
     `,
     vertexBody: `vAux = aux;`,
     fragmentPars: /* glsl */ `
@@ -124,7 +126,7 @@ export function makeTerrainMaterial() {
       uniform float uWetness;
       uniform float uWaterY;
       uniform float uCaustics;
-      varying vec2 vAux;
+      varying vec4 vAux;
       float terrainWetness() {
         return clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
       }
@@ -186,7 +188,143 @@ export function makeTerrainMaterial() {
   return mat;
 }
 
+/**
+ * The textured terrain: baked grass/rock/sand/snow sets splatted by the
+ * weights the mesh worker writes into the aux attribute (wetness, slope,
+ * sand, snow). Albedo multiplies the biome vertex colour, so the palette -
+ * and the physically-scaled reflectances it was tuned around - survive.
+ */
+function makeSplatTerrainMaterial(mat, detail) {
+  const t = assets.texture;
+  injectAtmosphere(mat, {
+    key: 'terrainsplat',
+    uniforms: {
+      tDetail: { value: detail },
+      tGrassC: { value: t('terrain/grass_color.jpg') },
+      tGrassNR: { value: t('terrain/grass_nr.jpg', { srgb: false }) },
+      tRockC: { value: t('terrain/rock_color.jpg') },
+      tRockNR: { value: t('terrain/rock_nr.jpg', { srgb: false }) },
+      tSandC: { value: t('terrain/sand_color.jpg') },
+      tSandNR: { value: t('terrain/sand_nr.jpg', { srgb: false }) },
+      tSnowC: { value: t('terrain/snow_color.jpg') },
+      tSnowNR: { value: t('terrain/snow_nr.jpg', { srgb: false }) },
+    },
+    vertexPars: /* glsl */ `
+      attribute vec4 aux;
+      varying vec4 vAux;
+    `,
+    vertexBody: `vAux = aux;`,
+    fragmentPars: /* glsl */ `
+      uniform sampler2D tDetail;
+      uniform sampler2D tGrassC, tGrassNR, tRockC, tRockNR, tSandC, tSandNR, tSnowC, tSnowNR;
+      uniform float uTime;
+      uniform float uWetness;
+      uniform float uWaterY;
+      uniform float uCaustics;
+      uniform float uSnowAmount;
+      varying vec4 vAux;
+      float terrainWetness() {
+        return clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
+      }
+    `,
+    // Weights and albedo. The locals declared here (gTp, gW*, gTexFade) are
+    // still in scope for the roughness and normal chunks below - all of
+    // main() is one function body.
+    colorFragment: /* glsl */ `
+      vec2 gTp = vWorldPos.xz * 0.34;
+      float gWRock = smoothstep( 0.30, 0.62, vAux.y );
+      float gDynSnow = clamp( uSnowAmount * ( 1.0 - vAux.y * 1.3 ), 0.0, 1.0 );
+      float gWSnow = clamp( vAux.w + gDynSnow, 0.0, 1.0 ) * ( 1.0 - gWRock * 0.55 );
+      float gWSand = vAux.z * ( 1.0 - gWRock ) * ( 1.0 - gWSnow );
+      float gWGrass = max( 1.0 - gWRock - gWSnow - gWSand, 0.0 );
+      float gWSum = gWRock + gWSnow + gWSand + gWGrass;
+      float gTexFade = exp( -length( cameraPosition - vWorldPos ) * 0.0035 );
+      {
+        vec3 splat = ( texture2D( tGrassC, gTp ).rgb * gWGrass
+                     + texture2D( tRockC, gTp * 0.62 ).rgb * gWRock
+                     + texture2D( tSandC, gTp * 1.15 ).rgb * gWSand
+                     + texture2D( tSnowC, gTp * 0.8 ).rgb * gWSnow ) / gWSum;
+        splat = mix( vec3( 0.52 ), splat, gTexFade );
+        diffuseColor.rgb *= splat * 1.92;
+        // Fresh snowfall whitens ground the worker baked as bare.
+        diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.72, 0.75, 0.82 ), gDynSnow * 0.85 );
+
+        // Large-scale patchiness from the runtime detail octaves, so the
+        // tiling never reads at landscape scale.
+        vec2 p = vWorldPos.xz;
+        vec3 d1 = texture2D( tDetail, p * 0.048 ).rgb;
+        vec3 d2 = texture2D( tDetail, p * 0.0067 ).rgb;
+        diffuseColor.rgb *= 1.0 + ( ( d1.g - 0.5 ) * 0.30 + ( d2.r - 0.5 ) * 0.40 );
+
+        float wet = terrainWetness();
+        diffuseColor.rgb *= mix( 1.0, 0.62, wet * 0.8 );
+
+        float below = uWaterY - vWorldPos.y;
+        if ( uCaustics > 0.5 && below > 0.0 ) {
+          float t = uTime * 0.55;
+          vec2 q = p * 0.42;
+          float c1 = texture2D( tDetail, q * 0.25 + vec2( t * 0.06, t * 0.04 ) ).b;
+          float c2 = texture2D( tDetail, q * 0.31 - vec2( t * 0.05, t * 0.07 ) ).r;
+          float caus = pow( max( 0.0, 1.0 - abs( c1 - c2 ) * 4.5 ), 3.0 );
+          float atten = exp( -below * 0.055 );
+          diffuseColor.rgb += vec3( 0.55, 0.85, 0.8 ) * caus * atten * 0.5;
+        }
+      }
+    `,
+    roughnessFragment: /* glsl */ `
+      vec3 gNR = ( texture2D( tGrassNR, gTp ).rgb * gWGrass
+                 + texture2D( tRockNR, gTp * 0.62 ).rgb * gWRock
+                 + texture2D( tSandNR, gTp * 1.15 ).rgb * gWSand
+                 + texture2D( tSnowNR, gTp * 0.8 ).rgb * gWSnow ) / gWSum;
+      roughnessFactor = mix( roughnessFactor, clamp( gNR.b * 1.25, 0.05, 1.0 ), gTexFade );
+      roughnessFactor = mix( roughnessFactor, 0.11, terrainWetness() * 0.8 );
+    `,
+    normalFragment: /* glsl */ `
+      {
+        // Splatted normal maps bend the lighting normal; the xz projection
+        // lies on cliffs, so it flattens out with slope, and with distance
+        // where mip-blended normals would only shimmer.
+        float bFade = gTexFade * ( 1.0 - clamp( vAux.y * 1.1, 0.0, 0.75 ) );
+        if ( bFade > 0.02 ) {
+          vec2 tn = gNR.rg * 2.0 - 1.0;
+          vec3 wgrad = vec3( tn.x, 0.0, tn.y ) * ( 0.9 * bFade );
+          normal = normalize( normal + ( viewMatrix * vec4( wgrad, 0.0 ) ).xyz );
+        }
+      }
+    `,
+  });
+  return mat;
+}
+
 /* ------------------------------------------------------------ water */
+
+// Shared between the vertex shader and World.waveHeightAt - if these drift
+// apart, the player stops bobbing on the swell they can see.
+export const GERSTNER_WAVES = [
+  // dirX, dirZ, wavelength (m), amplitude (m), steepness
+  [0.80, 0.60, 46, 0.40, 0.34],
+  [-0.55, 0.83, 27, 0.22, 0.40],
+  [0.20, -0.98, 13, 0.10, 0.46],
+  [0.95, -0.31, 6.5, 0.045, 0.50],
+];
+
+const GERSTNER_GLSL = GERSTNER_WAVES.map(([dx, dz, L, A, Q], i) => {
+  const k = (Math.PI * 2) / L;
+  const w = Math.sqrt(9.81 * k);
+  const il = 1 / Math.hypot(dx, dz);
+  return `
+    {
+      vec2 D = vec2( ${(dx * il).toFixed(4)}, ${(dz * il).toFixed(4)} );
+      float kk = ${k.toFixed(5)};
+      float A = ${A.toFixed(3)} * amp;
+      float ph = kk * dot( D, p0 ) + ${w.toFixed(4)} * uTime;
+      float ca = cos( ph ), sa = sin( ph );
+      wp.xz -= D * ( ${Q.toFixed(2)} * A * ca );
+      wp.y += A * sa;
+      crest += sa * ${(A / 0.765).toFixed(3)};
+      grad += D * ( A * kk * ca );
+    }`;
+}).join('\n');
 
 const WATER_VERT = /* glsl */ `
   #include <common>
@@ -195,48 +333,33 @@ const WATER_VERT = /* glsl */ `
   attribute float depth;
   uniform float uTime;
   uniform float uWaveScale;
+  uniform float uWindStrength;
   varying vec3 vWorldPos;
   varying vec2 vFlow;
   varying float vDepth;
   varying vec3 vNormalW;
-
-  // Two crossing gerstner-ish swells plus chop. Cheap, but it reads as water.
-  float waveH( vec2 p, float t, out vec2 grad ) {
-    float h = 0.0;
-    grad = vec2( 0.0 );
-    vec2 d1 = normalize( vec2( 0.8, 0.6 ) );
-    vec2 d2 = normalize( vec2( -0.55, 0.83 ) );
-    vec2 d3 = normalize( vec2( 0.2, -0.98 ) );
-    float k1 = 0.055, a1 = 0.62;
-    float k2 = 0.101, a2 = 0.30;
-    float k3 = 0.27, a3 = 0.085;
-    float p1 = dot( p, d1 ) * k1 + t * 0.62;
-    float p2 = dot( p, d2 ) * k2 + t * 0.90;
-    float p3 = dot( p, d3 ) * k3 + t * 1.7;
-    h += sin( p1 ) * a1 + sin( p2 ) * a2 + sin( p3 ) * a3;
-    grad += d1 * ( cos( p1 ) * a1 * k1 );
-    grad += d2 * ( cos( p2 ) * a2 * k2 );
-    grad += d3 * ( cos( p3 ) * a3 * k3 );
-    return h;
-  }
+  varying float vCrest;
 
   void main() {
     vec4 wp = modelMatrix * vec4( position, 1.0 );
     vFlow = flow;
     vDepth = depth;
-    // Waves flatten in the shallows and in rivers, where flow takes over.
+    // Waves flatten in the shallows and in rivers, where flow takes over -
+    // and the sea state follows the wind: glass at dawn, whitecaps in a storm.
     float shore = clamp( depth / 2.5, 0.0, 1.0 );
-    float amp = uWaveScale * shore * ( 1.0 - clamp( length( flow ) * 0.8, 0.0, 0.85 ) );
-    vec2 grad;
-    float h = waveH( wp.xz, uTime, grad );
-    wp.y += h * amp;
-    vec3 n = normalize( vec3( -grad.x * amp * 3.0, 1.0, -grad.y * amp * 3.0 ) );
-    vNormalW = n;
+    float amp = uWaveScale * shore * ( 1.0 - clamp( length( flow ) * 0.8, 0.0, 0.85 ) )
+      * ( 0.45 + clamp( uWindStrength, 0.0, 1.5 ) * 0.75 );
+    vec2 p0 = wp.xz;
+    vec2 grad = vec2( 0.0 );
+    float crest = 0.0;
+    ${'${GERSTNER}'}
+    vNormalW = normalize( vec3( -grad.x, 1.0, -grad.y ) );
+    vCrest = crest;
     vWorldPos = wp.xyz;
     gl_Position = projectionMatrix * viewMatrix * wp;
     #include <logdepthbuf_vertex>
   }
-`;
+`.replace('${GERSTNER}', GERSTNER_GLSL);
 
 const WATER_FRAG = /* glsl */ `
   precision highp float;
@@ -248,9 +371,33 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uDeep;
   uniform vec3 uShallow;
   uniform float uOpacity;
+  uniform float uWindStrength;
+  uniform float uMieK;
   varying vec2 vFlow;
   varying float vDepth;
   varying vec3 vNormalW;
+  varying float vCrest;
+
+  // A compact copy of the sky dome's radiance model (keep the constants in
+  // step with sky.js), so reflections carry the real gradient - blue noon,
+  // amber sunset - instead of a two-colour guess. Cloud cover greys it via
+  // the shared coverage uniform.
+  vec3 skyReflect( vec3 dir ) {
+    float y = max( dir.y, 0.02 );
+    float mu = clamp( dot( dir, uSunDir ), -1.0, 1.0 );
+    float airMass = 1.0 / ( y * 0.60 + 0.28 );
+    float phaseR = 0.0596831 * ( 1.0 + mu * mu );
+    float g = 0.87;
+    float phaseM = min( 0.1193662 * ( ( 1.0 - g * g ) / pow( max( 1.0 + g * g - 2.0 * g * mu, 1e-4 ), 1.5 ) ), 4.0 );
+    float sunPath = 1.0 / ( max( uSunDir.y, 0.0 ) + 0.085 );
+    vec3 betaR = vec3( 5.5, 13.0, 22.4 );
+    vec3 transmit = exp( -betaR * 0.0118 * sunPath );
+    float day = smoothstep( -0.22, 0.10, uSunDir.y );
+    vec3 col = ( betaR * phaseR + vec3( 21.0 ) * phaseM * uMieK ) * airMass * 0.145 * transmit * day;
+    col += vec3( 0.010, 0.016, 0.034 ) * ( 1.0 - day );
+    vec3 grey = mix( uHorizonColor, uZenithColor, 0.5 ) * 1.04;
+    return mix( col, grey, clamp( uCloudShadowCover * 0.85, 0.0, 1.0 ) );
+  }
 
   void main() {
     #include <logdepthbuf_fragment>
@@ -278,7 +425,7 @@ const WATER_FRAG = /* glsl */ `
     fres = 0.035 + fres * 0.95;
 
     vec3 R = reflect( -V, N );
-    vec3 sky = mix( uHorizonColor, uZenithColor, clamp( R.y * 1.25, 0.0, 1.0 ) );
+    vec3 sky = skyReflect( R );
 
     float deepK = clamp( vDepth / 24.0, 0.0, 1.0 );
     deepK = deepK * ( 2.0 - deepK );
@@ -292,12 +439,15 @@ const WATER_FRAG = /* glsl */ `
     float glint = pow( max( dot( N, H ), 0.0 ), 42.0 ) * 0.12;
     col += uSunColor * ( spec * 2.6 + glint );
 
-    // Foam at the shoreline and where the river runs fast.
+    // Foam: shoreline wash, river churn, and wind-torn whitecaps on crests.
     float shoreFoam = smoothstep( 2.4, 0.04, vDepth );
     float churn = smoothstep( 0.55, 1.5, speed );
     float fn = texture2D( tDetail, p * 0.9 - adv * 0.8 + vec2( uTime * 0.04, 0.0 ) ).r;
     float fn2 = texture2D( tDetail, p * 2.1 + adv * 0.3 ).g;
-    float foam = shoreFoam * smoothstep( 0.35, 0.75, fn ) + churn * smoothstep( 0.45, 0.85, fn2 ) * 0.85;
+    float whitecap = smoothstep( 0.72, 1.05, vCrest ) * smoothstep( 0.5, 1.2, uWindStrength );
+    float foam = shoreFoam * smoothstep( 0.35, 0.75, fn )
+      + churn * smoothstep( 0.45, 0.85, fn2 ) * 0.85
+      + whitecap * smoothstep( 0.30, 0.72, fn2 );
     col = mix( col, vec3( 0.93, 0.96, 0.97 ), clamp( foam, 0.0, 0.9 ) );
 
     float alpha = mix( 0.42, 0.94, clamp( vDepth / 1.6, 0.0, 1.0 ) );
@@ -342,13 +492,16 @@ export function makeWaterMaterial() {
 export function makeFoliageMaterial(opts = {}) {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.86,
+    roughness: opts.roughnessMap ? 1.0 : 0.86,
     metalness: 0,
     side: opts.doubleSide ? THREE.DoubleSide : THREE.FrontSide,
     alphaTest: opts.alphaTest || 0,
     map: opts.map || null,
+    normalMap: opts.normalMap || null,
+    roughnessMap: opts.roughnessMap || null,
     transparent: false,
   });
+  if (opts.normalMap) mat.normalScale.set(0.8, 0.8);
   injectAtmosphere(mat, {
     key: 'foliage' + (opts.key || ''),
     vertexPars: WIND_PARS + `\nvarying float vWind;\n`,

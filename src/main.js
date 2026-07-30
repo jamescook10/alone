@@ -7,6 +7,7 @@ import { UI } from './ui/hud.js';
 import { Audio } from './audio/audio.js';
 import { WorldGen } from './world/worldgen.js';
 import { clamp } from './core/noise.js';
+import { loadAssets } from './gfx/assets.js';
 
 const canvas = document.getElementById('view');
 const uiRoot = document.getElementById('ui');
@@ -100,7 +101,11 @@ function start() {
   requestAnimationFrame(() => setTimeout(() => boot(loading), 16));
 }
 
-function boot(loading) {
+async function boot(loading) {
+  // Baked geometry loads before the world exists, so the flora pools can be
+  // built around it. If it fails, the procedural builders take over.
+  loading.textContent = 'gathering what grows here';
+  await loadAssets();
   engine = new Engine(canvas);
   input = new Input(canvas);
 
@@ -224,14 +229,15 @@ let recoverChecks = 0;
 
 function autoQuality() {
   // Struggling: shed cost in order of least visible first.
-  if (smoothed < 40 && qualityStep < 4) {
+  if (smoothed < 40 && qualityStep < 5) {
     qualityStep++;
     recoverChecks = 0;
     if (qualityStep === 1) {
       preDropPixelRatio = engine.quality.pixelRatio;
       engine.setQuality({ pixelRatio: Math.max(0.7, engine.quality.pixelRatio * 0.75) });
-    } else if (qualityStep === 2) engine.setQuality({ godrays: false });
-    else if (qualityStep === 3) engine.setQuality({ bloom: false });
+    } else if (qualityStep === 2) engine.setQuality({ volClouds: false });
+    else if (qualityStep === 3) engine.setQuality({ godrays: false });
+    else if (qualityStep === 4) engine.setQuality({ bloom: false });
     else engine.setQuality({ shadows: false });
     ui.toast('eased the graphics a little');
     return;
@@ -242,9 +248,10 @@ function autoQuality() {
     recoverChecks++;
     if (recoverChecks >= 3) {
       recoverChecks = 0;
-      if (qualityStep === 4) engine.setQuality({ shadows: true });
-      else if (qualityStep === 3) engine.setQuality({ bloom: true });
-      else if (qualityStep === 2) engine.setQuality({ godrays: true });
+      if (qualityStep === 5) engine.setQuality({ shadows: true });
+      else if (qualityStep === 4) engine.setQuality({ bloom: true });
+      else if (qualityStep === 3) engine.setQuality({ godrays: true });
+      else if (qualityStep === 2) engine.setQuality({ volClouds: true });
       else engine.setQuality({ pixelRatio: preDropPixelRatio });
       qualityStep--;
     }

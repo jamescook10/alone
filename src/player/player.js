@@ -117,7 +117,9 @@ export class Player {
     const vel = this.velocity;
 
     const ground = terrain.heightAt(pos.x, pos.z);
-    const water = terrain.waterAt(pos.x, pos.z);
+    let water = terrain.waterAt(pos.x, pos.z);
+    // The surface you float on is the swell, not the flat datum.
+    if (water > -Infinity) water += this.world.waveHeightAt(pos.x, pos.z);
     this.waterLevel = water;
     const bodyTop = pos.y + this.eye;
     this.submersion = water > -Infinity ? saturate((water - pos.y) / 1.75) : 0;
@@ -157,6 +159,14 @@ export class Player {
       this._updateDrift(dt, wishX, wishZ, wishLen, wantUp, wantSink, wantSprint);
     } else if (this.swimming) {
       this._updateSwim(dt, wishX, wishZ, wishLen, wantUp, wantDown, water, ground);
+      // Rivers carry you: the same flow field that advects the ripples.
+      const s = this.world.wg.sample(pos.x, pos.z, this._flowSample || (this._flowSample = {}));
+      if (s.riverStrength > 0.05) {
+        const fd = this.world.wg.flowDir(pos.x, pos.z, this._flowDir || (this._flowDir = [0, 0]));
+        const push = s.riverStrength * 2.1 * dt;
+        vel.x += fd[0] * push;
+        vel.z += fd[1] * push;
+      }
     } else {
       this._updateWalk(dt, wishX, wishZ, wishLen, wantUp, ground, water);
     }
