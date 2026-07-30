@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { Inventory, ITEMS, SEED_NAMES } from './inventory.js';
 import { Substance, MATERIAL, PHASE, ambientAt } from '../sim/chemistry.js';
+import { makeSolidMaterial } from '../gfx/materials.js';
 import { SPECIES_INFO } from '../world/flora.js';
 import { clamp, lerp } from '../core/noise.js';
 
@@ -31,6 +32,30 @@ export class Interaction {
     world.engine.scene.add(this.heldTorchLight);
     this.observed = new Set();
     this._swing = 0;
+
+    // Containers set down in the world. They keep their contents and keep
+    // simulating where they stand - that is the whole point of a pot.
+    this.placed = [];
+    this._potGeo = new THREE.CylinderGeometry(0.20, 0.155, 0.24, 10);
+    this._potMat = makeSolidMaterial({ key: 'pot', vertexColors: false, flat: true, color: 0x33363b, roughness: 0.55, metalness: 0.6 });
+    this._potWaterGeo = new THREE.CircleGeometry(0.16, 10);
+    this._potWaterMat = makeSolidMaterial({ key: 'potwater', vertexColors: false, color: 0x1c2f38, roughness: 0.15 });
+  }
+
+  _placePot(x, y, z, substance) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(this._potGeo, this._potMat);
+    body.position.y = 0.12;
+    body.castShadow = true;
+    const water = new THREE.Mesh(this._potWaterGeo, this._potWaterMat);
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = 0.21;
+    g.add(body, water);
+    g.position.set(x, y, z);
+    this.world.engine.scene.add(g);
+    const c = { key: 'pot', substance: substance || null, x, y, z, mesh: g, water };
+    this.placed.push(c);
+    return c;
   }
 
   update(dt) {
@@ -41,6 +66,28 @@ export class Interaction {
     const ambient = ambientAt(w, p.position.x, p.position.y + 1, p.position.z);
     const firePower = w.fire.powerAt(p.position.x, p.position.y + 0.9, p.position.z);
     this.inv.update(dt, ambient, firePower);
+
+    // A pot set down keeps simulating: over a fire it boils, on a winter
+    // night it freezes. Notes only when you are near enough to notice.
+    for (const c of this.placed) {
+      c.water.visible = !!(c.substance && c.substance.litres > 0.04);
+      if (!c.substance || c.substance.litres <= 0) continue;
+      const amb = ambientAt(w, c.x, c.y + 0.2, c.z);
+      const power = w.fire.powerAt(c.x, c.y + 0.2, c.z);
+      const event = c.substance.step(dt, amb, power, 1);
+      if (!event) continue;
+      const near = Math.hypot(c.x - p.position.x, c.z - p.position.z) < 22;
+      if (event === 'boiled') {
+        if (near) w.note('The pot came to a rolling boil.', 'event');
+        w.particles.steam(c.x, c.y + 0.3, c.z, 0.8, 6);
+      } else if (event === 'boiling' && Math.random() < dt * 6) {
+        w.particles.steam(c.x, c.y + 0.3, c.z, 0.6, 1);
+      } else if (event === 'froze') {
+        if (near) w.note('The water in the pot froze.', 'event');
+      } else if (event === 'thawed') {
+        if (near) w.note('The ice in the pot melted.', 'event');
+      }
+    }
 
     // A lit torch is a real light and a real ignition source.
     const torch = this.inv.find('torch');
@@ -141,6 +188,19 @@ export class Interaction {
     }
     if (nearFire && (!best || 0.7 < best.dist)) best = { kind: 'fire', fire: nearFire, dist: 0.7 };
 
+    // Something you set down earlier. Beats the fire, so a pot sitting in the
+    // flames can still be looked at and lifted out.
+    let pc = null;
+    let pd = 1.4;
+    for (const c of this.placed) {
+      const d = Math.hypot(c.x - ahead.x, c.y + 0.15 - ahead.y, c.z - ahead.z);
+      if (d < pd) {
+        pd = d;
+        pc = c;
+      }
+    }
+    if (pc && (!best || 0.65 < best.dist)) best = { kind: 'placed', item: pc, dist: 0.65 };
+
     // Water within reach.
     const wl = w.terrain.waterAt(ahead.x, ahead.z);
     const gh = w.terrain.heightAt(ahead.x, ahead.z);
@@ -211,7 +271,11 @@ export class Interaction {
         break;
       }
       case 'fire':
-        if (key === 'pot' || key === 'canteen') {
+        if (key === 'pot' && held.n > 0) {
+          this.prompt = `<kbd>E</kbd> set the pot on the fire`;
+          const sub = held.substance;
+          if (sub) this.secondary = `${sub.label} at ${sub.temp.toFixed(0)}°C`;
+        } else if (key === 'canteen') {
           const sub = held.substance;
           this.prompt = sub && sub.litres > 0.05
             ? `<kbd>E</kbd> hold the ${ITEMS[key].name} over the flames`
@@ -226,8 +290,21 @@ export class Interaction {
           this.secondary = 'it smells of woodsmoke';
         }
         break;
+      case 'placed': {
+        const sub = t.item.substance;
+        this.prompt = `<kbd>E</kbd> pick up the pot`;
+        if (sub && sub.litres > 0.04) {
+          let s = `${sub.label} at ${sub.temp.toFixed(0)}°C`;
+          if (sub.phase === PHASE.SOLID) s += ' · frozen';
+          else if (sub.sterile) s += ' · boiled clean';
+          this.secondary = s;
+        } else {
+          this.secondary = 'empty';
+        }
+        break;
+      }
       case 'water':
-        if ((key === 'pot' || key === 'canteen')) {
+        if ((key === 'pot' || key === 'canteen') && held.n > 0) {
           const sub = held.substance;
           this.prompt = (!sub || sub.litres < 0.9)
             ? `<kbd>E</kbd> fill the ${ITEMS[key].name}`
@@ -257,7 +334,7 @@ export class Interaction {
         if (key === 'seed' && held.n > 0) this.prompt = `<kbd>E</kbd> plant a ${SEED_NAMES[held.species] || 'seed'}`;
         else if (key === 'firestarter' && this.inv.count('wood') > 0) this.prompt = `<kbd>E</kbd> build a fire`;
         else if (key === 'wood' && held.n > 0) this.prompt = `<kbd>E</kbd> stack the firewood`;
-        else if (key === 'pot' && held.substance && held.substance.litres > 0.1) this.prompt = `<kbd>E</kbd> set the pot down`;
+        else if (key === 'pot' && held.n > 0) this.prompt = `<kbd>E</kbd> set the pot down`;
         break;
     }
   }
@@ -332,7 +409,16 @@ export class Interaction {
           w.note('Your torch takes the flame.', 'event');
           return;
         }
-        if ((key === 'pot' || key === 'canteen') && held.substance) {
+        if (key === 'pot' && held.n > 0) {
+          this.inv.take('pot', 1);
+          const gy = w.terrain.heightAt(f.x, f.z);
+          this._placePot(f.x, gy, f.z, held.substance);
+          held.substance = null;
+          if (this.inv.current === held) this.inv.select(0);
+          w.note('You set the pot on the fire.', 'event');
+          return;
+        }
+        if (key === 'canteen' && held.substance) {
           w.note(`You hold the ${ITEMS[key].name} over the fire. ${held.substance.temp.toFixed(0)}°C.`, 'event');
           return;
         }
@@ -340,8 +426,21 @@ export class Interaction {
         w.note('Warmth. You had forgotten how good it feels.', 'note');
         return;
       }
+      case 'placed': {
+        const c = t.item;
+        w.engine.scene.remove(c.mesh);
+        this.placed.splice(this.placed.indexOf(c), 1);
+        this.inv.add('pot', 1, { substance: c.substance || null });
+        w.note(
+          c.substance && c.substance.temp > 55
+            ? 'You lift the pot carefully by the rim.'
+            : 'You picked the pot back up.',
+          'event'
+        );
+        return;
+      }
       case 'water': {
-        if (key === 'pot' || key === 'canteen') {
+        if ((key === 'pot' || key === 'canteen') && held.n > 0) {
           const sub = held.substance;
           if (!sub || sub.litres < 0.9) {
             const temp = ambientAt(w, t.x, t.level - 0.3, t.z);
@@ -422,6 +521,16 @@ export class Interaction {
           this.inv.take('wood', 1);
           w.physics.spawnDebris(t.x, t.y + 0.3, t.z, 0.16, 0.16, 0.9,
             [0.12, 0.082, 0.05], { kind: 'wood', life: 600 });
+          return;
+        }
+        if (key === 'pot' && held.n > 0) {
+          this.inv.take('pot', 1);
+          this._placePot(t.x, t.y, t.z, held.substance);
+          held.substance = null;
+          // Empty hands afterwards: the pot slot with nothing in it has no verbs.
+          if (this.inv.current === held) this.inv.select(0);
+          if (w.audio) w.audio.footstep('stone', 0.4);
+          w.note('You set the pot down.', 'event');
           return;
         }
         return;

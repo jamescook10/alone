@@ -14,6 +14,7 @@ const HELP = [
   ['E / Left click', 'use what is in front of you'],
   ['Q / Right click', 'second action · eat · drink'],
   ['1 – 9 / Wheel', 'choose what you are holding'],
+  ['Tab', 'menu — inventory and settings'],
   ['F', 'fly (and land again) · leave a vehicle'],
   ['B', 'raise or drop a bulldozer blade'],
   ['H', 'horn'],
@@ -22,7 +23,6 @@ const HELP = [
   ['M', 'mute'],
   ['O', 'cycle the weather'],
   ['[ ]', 'wind time back and forward'],
-  ['Tab', 'pause and settings'],
   ['Esc', 'release the mouse — click to take it back'],
 ];
 
@@ -54,7 +54,7 @@ export class UI {
           <div class="bar warmth"><i style="width:100%"></i></div>
           <div class="bar energy"><i style="width:100%"></i></div>
         </div>
-        <div id="hotbar"></div>
+        <div id="held"><span class="cur"></span><span class="menuhint"><b>Tab</b> menu</span></div>
         <div id="toast"></div>
         <div id="discovery"><div class="big"></div><div class="sub"></div></div>
       </div>
@@ -66,6 +66,8 @@ export class UI {
       </div></div>
       <div id="pause" class="panel hidden"><div class="inner">
         <h2>Alone</h2>
+        <h3>Carrying</h3>
+        <div class="inv"></div>
         <h3>Controls</h3>
         <div class="keys">${HELP.map(([k, v]) => `<div class="row"><b>${k}</b><span>${v}</span></div>`).join('')}</div>
         <h3>This world</h3>
@@ -94,7 +96,8 @@ export class UI {
     this.placeEl = this.root.querySelector('#place');
     this.statusEl = this.root.querySelector('#status');
     this.compassEl = this.root.querySelector('#compass .ticks');
-    this.hotbarEl = this.root.querySelector('#hotbar');
+    this.heldEl = this.root.querySelector('#held .cur');
+    this.invList = this.root.querySelector('#pause .inv');
     this.toastEl = this.root.querySelector('#toast');
     this.discoveryEl = this.root.querySelector('#discovery');
     this.journalEl = this.root.querySelector('#journal');
@@ -121,7 +124,6 @@ export class UI {
       t.addEventListener('click', () => this._toggle(t.dataset.t));
     }
     this._buildCompass();
-    this._buildHotbar();
     this._refreshSettings();
   }
 
@@ -135,17 +137,25 @@ export class UI {
     this.compassMarks = [...this.compassEl.querySelectorAll('.t')];
   }
 
-  _buildHotbar() {
+  /** The inventory lives in the Tab menu; rebuilt each time it opens. */
+  _buildInventory() {
     const inv = this.world.inventory;
     if (!inv) return;
-    this.hotbarEl.innerHTML = inv.slots
+    this.invList.innerHTML = inv.slots
       .map((s, i) => {
         const item = ITEMS[s.key] || { icon: '?', name: s.key };
-        return `<div class="slot" data-i="${i}"><span class="lbl"></span>${item.icon}<span class="n"></span></div>`;
+        return `<div class="irow ${i === inv.selected ? 'sel' : ''} ${s.n > 0 ? '' : 'empty'}" data-i="${i}">
+          <b class="key">${i < 9 ? i + 1 : ''}</b><span class="icon">${item.icon}</span>
+          <span class="name">${inv.label(s)}</span><span class="cnt">${s.n > 1 ? '× ' + s.n : ''}</span>
+        </div>`;
       })
       .join('');
-    this.slotEls = [...this.hotbarEl.querySelectorAll('.slot')];
-    this.slotEls.forEach((el, i) => el.addEventListener('click', () => inv.select(i)));
+    for (const el of this.invList.querySelectorAll('.irow')) {
+      el.addEventListener('click', () => {
+        inv.select(+el.dataset.i);
+        this._buildInventory();
+      });
+    }
   }
 
   _toggle(which) {
@@ -266,6 +276,7 @@ export class UI {
       this.root.querySelector('.high').textContent = `${p.highestPoint.toFixed(0)} m`;
       this.root.querySelector('.deep').textContent = `${p.deepestPoint.toFixed(0)} m`;
       this.root.querySelector('.days').textContent = (this.world.sky.day + 1).toString();
+      this._buildInventory();
       this._refreshSettings();
       if (this.world.input) this.world.input.exitLock();
     } else if (this.world.input) {
@@ -337,18 +348,20 @@ export class UI {
       this.root.querySelector('.bar.warmth').style.opacity = p.warmth < 0.9 ? '1' : '0.18';
       this.root.querySelector('.bar.energy').style.opacity = p.energy < 0.9 ? '1' : '0.18';
 
-      // Hotbar.
-      const inv = w.inventory;
-      if (inv && this.slotEls) {
-        for (let i = 0; i < this.slotEls.length; i++) {
-          const el = this.slotEls[i];
-          const slot = inv.slots[i];
-          el.classList.toggle('sel', i === inv.selected);
-          const n = el.querySelector('.n');
-          n.textContent = slot.n > 1 ? slot.n : '';
-          el.style.opacity = slot.n > 0 ? '1' : '0.3';
-          if (i === inv.selected) el.querySelector('.lbl').textContent = inv.label(slot);
-        }
+    }
+
+    // What you are holding — one quiet line where the hotbar used to be.
+    const inv = w.inventory;
+    if (inv) {
+      const slot = inv.current;
+      const item = ITEMS[slot.key] || { icon: '?', name: slot.key };
+      const txt = slot.n > 0
+        ? `${item.icon} ${inv.label(slot)}${slot.n > 1 ? ` × ${slot.n}` : ''}`
+        : `${item.icon} ${item.name} — none left`;
+      if (txt !== this._heldTxt) {
+        this._heldTxt = txt;
+        this.heldEl.textContent = txt;
+        this.heldEl.style.opacity = slot.n > 0 ? '' : '0.45';
       }
     }
 

@@ -380,59 +380,87 @@ body {
 
 /* --------------------------------------------------------- inventory ---- */
 
-#hotbar {
+/* One quiet line where the hotbar used to be: what you hold, and the way in. */
+#held {
   position: absolute;
-  bottom: 24px;
+  bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
-}
-
-.slot {
-  width: 54px;
-  height: 54px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 6px;
-  background: rgba(10, 14, 20, 0.34);
-  backdrop-filter: blur(7px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: 21px;
-  position: relative;
-  transition: border-color 0.2s, transform 0.2s, background 0.2s;
-}
-
-.slot.sel {
-  border-color: rgba(255, 255, 255, 0.85);
-  transform: translateY(-5px);
-  background: rgba(30, 40, 52, 0.5);
-}
-
-.slot .n {
-  position: absolute;
-  right: 4px;
-  bottom: 2px;
-  font-size: 10px;
+  align-items: baseline;
+  gap: 18px;
+  font-size: 12.5px;
+  letter-spacing: 0.12em;
   color: var(--dim);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
 }
 
-.slot .lbl {
-  position: absolute;
-  top: -19px;
-  font-size: 9.5px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--faint);
-  white-space: nowrap;
-  opacity: 0;
+#held .cur {
+  color: rgba(255, 255, 255, 0.88);
   transition: opacity 0.2s;
 }
 
-.slot.sel .lbl {
-  opacity: 1;
+#held .menuhint {
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+#held .menuhint b {
+  font-weight: 500;
+  color: var(--dim);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+  padding: 0 5px;
+  margin-right: 4px;
+}
+
+/* The inventory itself lives in the Tab menu. */
+.panel .irow {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 2.2;
+  color: var(--dim);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 1px 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.panel .irow:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.panel .irow.sel {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.panel .irow.empty {
+  opacity: 0.38;
+}
+
+.panel .irow .key {
+  width: 16px;
+  font-weight: 500;
+  color: var(--faint);
+  text-align: center;
+}
+
+.panel .irow.sel .key {
+  color: var(--ink);
+}
+
+.panel .irow .name {
+  flex: 1;
+}
+
+.panel .irow .cnt {
+  color: var(--faint);
 }
 
 /* ------------------------------------------------------------ panels ---- */
@@ -578,7 +606,7 @@ body {
 
 @media (max-width: 720px) {
   #status, #place { font-size: 10.5px; }
-  .slot { width: 44px; height: 44px; font-size: 17px; }
+  #held { font-size: 11px; }
 }
 
 /* ------------------------------------------------------- mouse capture --- */

@@ -46,7 +46,7 @@ title.innerHTML = `
   <div class="hint">
     <b>W A S D</b> walk &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>Space</b> jump &nbsp;·&nbsp; <b>Mouse</b> look<br />
     <b>E</b> use what is in front of you &nbsp;·&nbsp; <b>Q</b> second action &nbsp;·&nbsp; <b>1–9</b> what you hold<br />
-    <b>F</b> fly (<b>Shift</b> faster) &nbsp;·&nbsp; <b>X</b> sit &nbsp;·&nbsp; <b>J</b> journal &nbsp;·&nbsp; <b>P</b> photo &nbsp;·&nbsp; <b>Tab</b> pause<br />
+    <b>F</b> fly (<b>Shift</b> faster) &nbsp;·&nbsp; <b>X</b> sit &nbsp;·&nbsp; <b>J</b> journal &nbsp;·&nbsp; <b>P</b> photo &nbsp;·&nbsp; <b>Tab</b> menu<br />
     <span style="opacity:.72">If the mouse comes loose, click the view to take it back.</span><br />
     <span style="opacity:.72">Everything is generated as you go. Nothing here wants anything from you.<br />
     Best with headphones — the sound is fully three-dimensional.</span>
@@ -118,7 +118,6 @@ async function boot(loading) {
 
   ui = new UI(world, engine, {});
   world.ui = ui;
-  ui._buildHotbar();
 
   audio = new Audio(world);
   world.audio = audio;
