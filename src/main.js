@@ -219,15 +219,38 @@ let cycleWeather = 0;
 let qualityStep = 0;
 let errorCount = 0;
 let lastError = null;
+let preDropPixelRatio = 0;
+let recoverChecks = 0;
 
 function autoQuality() {
-  if (qualityStep >= 3) return;
-  if (smoothed > 40) return;
-  qualityStep++;
-  if (qualityStep === 1) engine.setQuality({ pixelRatio: Math.max(0.7, engine.quality.pixelRatio * 0.75) });
-  else if (qualityStep === 2) engine.setQuality({ bloom: false });
-  else engine.setQuality({ shadows: false });
-  ui.toast('eased the graphics a little');
+  // Struggling: shed cost in order of least visible first.
+  if (smoothed < 40 && qualityStep < 4) {
+    qualityStep++;
+    recoverChecks = 0;
+    if (qualityStep === 1) {
+      preDropPixelRatio = engine.quality.pixelRatio;
+      engine.setQuality({ pixelRatio: Math.max(0.7, engine.quality.pixelRatio * 0.75) });
+    } else if (qualityStep === 2) engine.setQuality({ godrays: false });
+    else if (qualityStep === 3) engine.setQuality({ bloom: false });
+    else engine.setQuality({ shadows: false });
+    ui.toast('eased the graphics a little');
+    return;
+  }
+  // Comfortable for a sustained stretch: give back what was taken, one step
+  // at a time, so a brief city visit does not permanently dull the world.
+  if (qualityStep > 0 && smoothed > 56) {
+    recoverChecks++;
+    if (recoverChecks >= 3) {
+      recoverChecks = 0;
+      if (qualityStep === 4) engine.setQuality({ shadows: true });
+      else if (qualityStep === 3) engine.setQuality({ bloom: true });
+      else if (qualityStep === 2) engine.setQuality({ godrays: true });
+      else engine.setQuality({ pixelRatio: preDropPixelRatio });
+      qualityStep--;
+    }
+  } else {
+    recoverChecks = 0;
+  }
 }
 
 function escapeHtml(s) {
