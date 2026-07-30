@@ -47,6 +47,7 @@ export class Player {
     this.landDip = 0;
     this.shakeAmount = 0;
     this.stepDist = 0;
+    this._stride = 1;
     this.footMaterial = 'grass';
     this.lookTarget = null;
     this.sheltered = 0;
@@ -368,9 +369,12 @@ export class Player {
     if (!this.onGround) return;
     this.stepDist += this.speed * dt;
     this.distanceWalked += this.speed * dt;
-    const stride = lerp(1.85, 2.5, this.sprint) * lerp(1, 0.7, this.crouch);
+    // Walking at a constant speed on flat ground otherwise puts a footfall on
+    // an exact metronome, which the ear locks onto and cannot let go of.
+    const stride = lerp(1.85, 2.5, this.sprint) * lerp(1, 0.7, this.crouch) * this._stride;
     if (this.stepDist < stride || this.speed < 0.4) return;
     this.stepDist = 0;
+    this._stride = 0.90 + Math.random() * 0.20;
     const s = this.world.terrain.sampleAt(this.position.x, this.position.z);
     let mat = 'grass';
     if (this.submersion > 0.08) mat = 'water';
