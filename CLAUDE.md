@@ -139,11 +139,13 @@ src/ui/      hud, journal, settings
   lifted the original no-assets rule to get a polished look: trees are now
   generated offline by `scripts/bake-trees.mjs` (ez-tree, MIT) into
   `public/assets/`, with their textures vendored from the same MIT package —
-  see `public/assets/trees/LICENSE.md`. The world is still procedurally
-  *placed* and everything still works (procedural fallbacks) if the assets
-  fail to load. Keep new assets CC0/MIT, keep the pack a few MB, and prefer
-  bake scripts over checked-in binaries wherever possible so the "generated
-  world" spirit survives.
+  see `public/assets/trees/LICENSE.md`. The player's visible body is the
+  KayKit Rogue (CC0), stripped to locomotion + sitting clips by
+  `scripts/bake-character.mjs` — see `public/assets/character/LICENSE.md`.
+  The world is still procedurally *placed* and everything still works
+  (procedural fallbacks) if the assets fail to load. Keep new assets CC0/MIT,
+  keep the pack a few MB, and prefer bake scripts over checked-in binaries
+  wherever possible so the "generated world" spirit survives.
 - Budgets for baked trees: ~600–1100 triangles near, ~60–100 far. The near
   ring holds hundreds of full-detail trees at once; `Flora._retier` demotes
   chunks past ~200 m to the far pools, so both numbers matter.

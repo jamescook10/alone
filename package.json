@@ -12,6 +12,9 @@
   },
   "devDependencies": {
     "@dgreenheck/ez-tree": "^1.1.0",
+    "@gltf-transform/core": "^4.4.2",
+    "@gltf-transform/extensions": "^4.4.2",
+    "@gltf-transform/functions": "^4.4.2",
     "playwright-core": "^1.62.0",
     "vite": "^8.1.5"
   },
