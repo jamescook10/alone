@@ -6,13 +6,14 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { GodRaysPass } from '../gfx/godrays.js';
 
 /** Final look: vignette, grain, subtle aberration, underwater tint, fade. */
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
-    uVignette: { value: 0.40 },
+    uVignette: { value: 0.30 },
     uGrain: { value: 0.020 },
     uAberration: { value: 0.0008 },
     uSaturation: { value: 1.14 },
@@ -23,6 +24,7 @@ const GradeShader = {
     uFadeColor: { value: new THREE.Color(0, 0, 0) },
     uDamage: { value: 0 },
     uResolution: { value: new THREE.Vector2(1, 1) },
+    uSharpness: { value: 0.30 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -34,6 +36,7 @@ const GradeShader = {
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
     uniform float uTime, uVignette, uGrain, uAberration, uSaturation, uUnderwater, uFade, uDamage;
+    uniform float uSharpness;
     uniform vec3 uLift, uTint, uFadeColor;
     uniform vec2 uResolution;
     varying vec2 vUv;
@@ -60,6 +63,21 @@ const GradeShader = {
       col.r = texture2D( tDiffuse, uv + c * ab ).r;
       col.g = texture2D( tDiffuse, uv ).g;
       col.b = texture2D( tDiffuse, uv - c * ab ).b;
+
+      // Adaptive sharpen: an unsharp mask clamped to the local neighbourhood,
+      // so it restores crispness lost to sub-native rendering without ringing
+      // around the sun or other HDR extremes.
+      if ( uSharpness > 0.001 ) {
+        vec2 px = 1.0 / uResolution;
+        vec3 nN = texture2D( tDiffuse, uv + vec2( 0.0, -px.y ) ).rgb;
+        vec3 nS = texture2D( tDiffuse, uv + vec2( 0.0, px.y ) ).rgb;
+        vec3 nE = texture2D( tDiffuse, uv + vec2( px.x, 0.0 ) ).rgb;
+        vec3 nW = texture2D( tDiffuse, uv + vec2( -px.x, 0.0 ) ).rgb;
+        vec3 mn = min( col, min( min( nN, nS ), min( nE, nW ) ) );
+        vec3 mx = max( col, max( max( nN, nS ), max( nE, nW ) ) );
+        vec3 hi = col + ( col * 4.0 - nN - nS - nE - nW ) * uSharpness;
+        col = clamp( hi, mn, mx );
+      }
 
       // Saturation and a gentle filmic lift.
       float l = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
@@ -103,7 +121,7 @@ export class Engine {
   constructor(canvas, quality = {}) {
     this.canvas = canvas;
     this.quality = Object.assign(
-      { shadows: true, bloom: true, pixelRatio: defaultPixelRatio(), shadowSize: 1536 },
+      { shadows: true, bloom: true, godrays: true, pixelRatio: defaultPixelRatio(), shadowSize: 2048 },
       quality
     );
 
@@ -123,7 +141,10 @@ export class Engine {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = this.quality.shadows;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Soft-edged shadows: the extra filter taps cost far less than they look
+    // like they should, and hard shadow edges are the single quickest way for
+    // a natural scene to read as "video game".
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x87a7c4, 1);
     this.renderer.info.autoReset = false;
 
@@ -138,7 +159,9 @@ export class Engine {
     // distance where the atmosphere hides them anyway.
     this.sun = new THREE.DirectionalLight(0xffffff, 2.6);
     this.sun.castShadow = this.quality.shadows;
-    const S = 108;
+    // 2048 over 132 m is a finer texel than the old 1536 over 108 m, so this
+    // reaches further AND looks crisper.
+    const S = 132;
     this.sun.shadow.camera.left = -S;
     this.sun.shadow.camera.right = S;
     this.sun.shadow.camera.top = S;
@@ -178,7 +201,15 @@ export class Engine {
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
 
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.42, 0.72, 0.86);
+    // Shafts go in before bloom, so the bright core near the sun gets the
+    // same halo treatment as everything else and the two effects fuse.
+    this.godrays = new GodRaysPass(this.camera);
+    this.godrays.enabled = this.quality.godrays;
+    this.composer.addPass(this.godrays);
+
+    // Tighter than the old (0.42, 0.72, 0.86): with the sun disc at 14x,
+    // a wide low-threshold bloom smeared a halo over half the frame.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.38, 0.55, 1.05);
     this.bloom.enabled = this.quality.bloom;
     this.composer.addPass(this.bloom);
 
@@ -193,6 +224,10 @@ export class Engine {
     const h = window.innerHeight;
     this.renderer.setPixelRatio(this.quality.pixelRatio);
     this.renderer.setSize(w, h, false);
+    // The composer caches the pixel ratio it saw at construction; without
+    // this, changing the resolution setting resized the final blit but kept
+    // rendering the scene at the old buffer size.
+    this.composer.setPixelRatio(this.quality.pixelRatio);
     this.composer.setSize(w, h);
     // Bloom is a wide, soft, low-frequency effect: half resolution is
     // indistinguishable and costs a quarter of the fill rate.
@@ -214,6 +249,7 @@ export class Engine {
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.sun.castShadow = this.quality.shadows;
     this.bloom.enabled = this.quality.bloom;
+    this.godrays.enabled = this.quality.godrays;
     this.resize();
   }
 

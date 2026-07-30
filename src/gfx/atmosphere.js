@@ -26,6 +26,12 @@ export const atmo = {
   uPlayerPos: { value: new THREE.Vector3() },
   uWaterY: { value: 0 },
   uCaustics: { value: 1 },
+  // Cloud shadows: every lit material reads the same drifting coverage field,
+  // so shadow dapples sweep across terrain, trees and water together.
+  tAtmoNoise: { value: null },
+  uCloudShadow: { value: 0 },
+  uCloudShadowCover: { value: 0.4 },
+  uCloudOff: { value: new THREE.Vector2(0, 0) },
 };
 
 export const ATMO_PARS = /* glsl */ `
@@ -39,7 +45,22 @@ uniform float uFogBase;
 uniform float uUnderwater;
 uniform vec3 uWaterFog;
 uniform float uWaterDensity;
+uniform sampler2D tAtmoNoise;
+uniform float uCloudShadow;
+uniform float uCloudShadowCover;
+uniform vec2 uCloudOff;
 varying vec3 vWorldPos;
+
+// The same coverage field the sky's cloud slab uses, projected onto the
+// ground. Strength arrives pre-scaled by how much direct sun there is, so at
+// night or under full overcast this is a single uniform test and nothing more.
+float atmoCloudShadow( vec2 xz ) {
+  if ( uCloudShadow < 0.003 ) return 1.0;
+  vec2 p = xz * 0.00058 + uCloudOff;
+  float f = texture2D( tAtmoNoise, p ).r * 0.62 + texture2D( tAtmoNoise, p * 2.9 + 0.37 ).g * 0.38;
+  float sh = smoothstep( 0.86 - uCloudShadowCover * 0.55, 1.04 - uCloudShadowCover * 0.42, f + 0.24 );
+  return 1.0 - sh * uCloudShadow;
+}
 
 vec3 atmoApply( vec3 color, vec3 wp, vec3 cam ) {
   vec3 v = wp - cam;
@@ -52,6 +73,8 @@ vec3 atmoApply( vec3 color, vec3 wp, vec3 cam ) {
     vec3 wf = mix( uWaterFog, uWaterFog * 0.12, depthK );
     return mix( color, wf, clamp( f, 0.0, 1.0 ) );
   }
+
+  color *= atmoCloudShadow( wp.xz );
 
   float b = uFogFalloff;
   float dy = dir.y;
@@ -111,6 +134,18 @@ export function injectAtmosphere(material, opts = {}) {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <roughnessmap_fragment>',
         '#include <roughnessmap_fragment>\n' + opts.roughnessFragment
+      );
+    }
+    if (opts.normalFragment) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <normal_fragment_maps>',
+        '#include <normal_fragment_maps>\n' + opts.normalFragment
+      );
+    }
+    if (opts.emissiveFragment) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        '#include <emissivemap_fragment>\n' + opts.emissiveFragment
       );
     }
     material.userData.shader = shader;

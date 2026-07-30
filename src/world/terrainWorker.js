@@ -507,7 +507,10 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
         const info = BIOME_INFO[gbiome[g]];
         const dens = info.grass * (0.6 + gmoist[g] * 0.7);
         const r = ((hh >>> 18) & 2047) / 2047;
-        if (r > dens * 0.62) continue;
+        // Cap the pass rate: a wet meadow's density (1.4 * 1.3) used to pass
+        // every cell - nearly 8000 tufts per chunk - which exhausted the
+        // whole instance pool on a handful of chunks and left the rest bald.
+        if (r > Math.min(dens * 0.62, 0.5)) continue;
         const isFlower = hash3f(ci, cj, 0x5) < info.flowers * 0.07;
         grass.push(
           px, h, pz,

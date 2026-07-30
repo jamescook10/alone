@@ -217,8 +217,11 @@ export class Weather {
     this.windDir.set(Math.cos(this.windAngle), Math.sin(this.windAngle));
 
     this.humidity = saturate(0.15 + localMoist * 0.42 + this.rain * 0.4);
-    // Valley fog on calm, damp mornings.
-    const dawn = this.world.sky ? smoothstep(0.30, 0.24, Math.abs(this.world.sky.time - 0.27)) : 0;
+    // Valley fog on calm, damp mornings. The window is ±~1h around 06:30,
+    // fading out over the next hour - the old (0.30, 0.24) edges kept "dawn"
+    // fully on from 3 am until past noon, which is why every morning looked
+    // like soup until lunchtime.
+    const dawn = this.world.sky ? smoothstep(0.085, 0.045, Math.abs(this.world.sky.time - 0.27)) : 0;
     this.fog = saturate(damp * 0.8 * (1 - stormy) * (0.25 + dawn) + this.rain * 0.25);
     this.temperature = localTemp;
 

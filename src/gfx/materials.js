@@ -39,6 +39,9 @@ export function detailTexture() {
   _detailTex.generateMipmaps = true;
   _detailTex.minFilter = THREE.LinearMipmapLinearFilter;
   _detailTex.magFilter = THREE.LinearFilter;
+  // Without anisotropy the ground at walking-eye grazing angles collapses
+  // into radial mip smear - it read as motion blur on a still frame.
+  _detailTex.anisotropy = 4;
   return _detailTex;
 }
 
@@ -61,29 +64,39 @@ export function blobTexture(softness = 0.55, seed = 3) {
 
 /** A tuft of grass blades drawn as an alpha card. */
 export function grassTexture() {
-  const W = 64,
-    H = 64;
+  const W = 128,
+    H = 128;
   const c = document.createElement('canvas');
   c.width = W;
   c.height = H;
   const g = c.getContext('2d');
   g.clearRect(0, 0, W, H);
-  for (let i = 0; i < 9; i++) {
-    const x0 = 8 + Math.random() * (W - 16);
-    const lean = (Math.random() - 0.5) * 22;
-    const w = 1.6 + Math.random() * 2.4;
-    const h = H * (0.45 + Math.random() * 0.55);
-    const shade = 120 + Math.random() * 95;
-    g.strokeStyle = `rgba(${(shade * 0.78) | 0},${shade | 0},${(shade * 0.50) | 0},1)`;
+  // Each blade is drawn dark-to-light along its length: the base of a real
+  // tuft sits in its own shadow, and that gradient is most of what makes
+  // grass read as dense rather than as flat green strokes.
+  for (let i = 0; i < 17; i++) {
+    const x0 = 12 + Math.random() * (W - 24);
+    const lean = (Math.random() - 0.5) * 46;
+    const w = 2.4 + Math.random() * 3.6;
+    const h = H * (0.42 + Math.random() * 0.58);
+    const shade = 110 + Math.random() * 110;
+    const tipX = x0 + lean;
+    const tipY = H - h;
+    const grad = g.createLinearGradient(x0, H, tipX, tipY);
+    grad.addColorStop(0, `rgba(${(shade * 0.46) | 0},${(shade * 0.58) | 0},${(shade * 0.30) | 0},1)`);
+    grad.addColorStop(0.55, `rgba(${(shade * 0.72) | 0},${(shade * 0.94) | 0},${(shade * 0.44) | 0},1)`);
+    grad.addColorStop(1, `rgba(${(shade * 0.95) | 0},${shade | 0},${(shade * 0.52) | 0},1)`);
+    g.strokeStyle = grad;
     g.lineWidth = w;
     g.lineCap = 'round';
     g.beginPath();
     g.moveTo(x0, H);
-    g.quadraticCurveTo(x0 + lean * 0.4, H - h * 0.55, x0 + lean, H - h);
+    g.quadraticCurveTo(x0 + lean * 0.4, H - h * 0.55, tipX, tipY);
     g.stroke();
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
   return t;
 }
 
@@ -117,6 +130,27 @@ export function makeTerrainMaterial() {
       }
     `,
     roughnessFragment: `roughnessFactor = mix( roughnessFactor, 0.11, terrainWetness() * 0.8 );`,
+    // Micro-relief: treat two octaves of the detail texture as a height field
+    // and bend the lighting normal by its gradient. This is what stops close
+    // ground reading as a smooth painted sheet. It fades with distance (far
+    // terrain gets its shape from real geometry and fog) and flattens on
+    // cliffs, where an xz-projected gradient would point the wrong way.
+    normalFragment: /* glsl */ `
+      {
+        float bDist = length( cameraPosition - vWorldPos );
+        float bFade = exp( -bDist * 0.010 ) * ( 1.0 - clamp( vAux.y * 1.5, 0.0, 1.0 ) );
+        if ( bFade > 0.02 ) {
+          vec2 bp = vWorldPos.xz;
+          const float e = 0.22;
+          #define ALONE_TH(q) ( texture2D( tDetail, (q) * 0.29 ).r + texture2D( tDetail, (q) * 0.048 ).g * 1.7 )
+          float th0 = ALONE_TH( bp );
+          float thx = ALONE_TH( bp + vec2( e, 0.0 ) );
+          float thz = ALONE_TH( bp + vec2( 0.0, e ) );
+          vec3 wgrad = vec3( thx - th0, 0.0, thz - th0 ) * ( 0.62 * bFade / e );
+          normal = normalize( normal - ( viewMatrix * vec4( wgrad, 0.0 ) ).xyz );
+        }
+      }
+    `,
     colorFragment: /* glsl */ `
       {
         vec2 p = vWorldPos.xz;
@@ -231,7 +265,12 @@ const WATER_FRAG = /* glsl */ `
     vec3 r1 = texture2D( tDetail, p * 0.21 * s - adv * 0.21 + vec2( uTime * 0.013, uTime * 0.017 ) ).rgb;
     vec3 r2 = texture2D( tDetail, p * 0.55 * s + adv * 0.11 - vec2( uTime * 0.021, -uTime * 0.011 ) ).rgb;
     vec2 ripple = ( vec2( r1.r, r1.g ) - 0.5 ) * 0.9 + ( vec2( r2.g, r2.b ) - 0.5 ) * 0.55;
-    float rippleAmp = 0.55 + speed * 1.6;
+    // Ripples fade with distance: far water keeps only the large swell, which
+    // kills the tiling shimmer and gives the long calm reflections that make
+    // a lake look deep instead of busy.
+    float rDist = length( cameraPosition - vWorldPos );
+    float rFade = exp( -rDist * 0.0045 );
+    float rippleAmp = ( 0.55 + speed * 1.6 ) * ( 0.22 + 0.78 * rFade );
     vec3 N = normalize( vNormalW + vec3( ripple.x, 0.0, ripple.y ) * rippleAmp );
     if ( dot( N, V ) < 0.0 ) N = -N;
 
@@ -326,6 +365,19 @@ export function makeFoliageMaterial(opts = {}) {
     `,
     fragmentPars: `varying float vWind;\nuniform float uSnowAmount;`,
     colorFragment: /* glsl */ `
+      ${opts.colorVar
+        ? /* glsl */ `
+      {
+        // Clump-scale colour variation from world position. A canopy is many
+        // generations of leaves in many states; one flat green is what makes
+        // procedural trees look like plastic.
+        vec3 cvn = texture2D( tAtmoNoise, vWorldPos.xz * 0.055 + vWorldPos.y * 0.021 ).rgb;
+        diffuseColor.rgb *= ${(1 - opts.colorVar * 0.5).toFixed(3)} + ${opts.colorVar.toFixed(3)} * cvn.g;
+        diffuseColor.r *= 1.0 + ( cvn.r - 0.5 ) * 0.30;
+        diffuseColor.g *= 1.0 + ( cvn.b - 0.5 ) * 0.16;
+      }
+      `
+        : ''}
       {
         // Snow settles on upward-facing leaves and branches.
         float up = clamp( vNormal.y, 0.0, 1.0 );
@@ -333,6 +385,18 @@ export function makeFoliageMaterial(opts = {}) {
         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.90, 0.93, 0.98 ), snow );
       }
     `,
+    // Leaves are thin: looking through a canopy toward the sun should glow.
+    // uSunColor already carries the sky's brightness, so this fades itself out
+    // at night and under overcast without any extra bookkeeping.
+    emissiveFragment: opts.translucency
+      ? /* glsl */ `
+      {
+        vec3 tV = normalize( cameraPosition - vWorldPos );
+        float back = pow( clamp( dot( -tV, uSunDir ), 0.0, 1.0 ), 3.0 );
+        totalEmissiveRadiance += diffuseColor.rgb * uSunColor * back * ${opts.translucency.toFixed(2)};
+      }
+    `
+      : '',
   });
   return mat;
 }

@@ -248,7 +248,7 @@ export class Terrain {
         if (node.water) node.water.visible = false;
         this.world.flora.setChunkVisible(node, false);
       } else {
-        this._request(node);
+        this._request(node, d);
         if (node.mesh) node.mesh.visible = true;
         if (node.water) node.water.visible = true;
         this.world.flora.setChunkVisible(node, true);
@@ -259,17 +259,20 @@ export class Terrain {
         node.children = null;
         node.childrenLoaded = 0;
       }
-      this._request(node);
+      this._request(node, d);
       if (node.mesh) node.mesh.visible = true;
       if (node.water) node.water.visible = true;
       this.world.flora.setChunkVisible(node, true);
     }
   }
 
-  _request(node) {
+  _request(node, dist = 0) {
     if (node.loaded || node.requested) return;
     node.requested = true;
-    node.priority = node.lod;
+    // Same-LOD chunks used to load in root-scan order, so at boot the chunk
+    // under the player's feet could be meshed last - and, with finite
+    // instance pools, get no grass at all. Distance breaks the tie.
+    node.priority = node.lod * 1e6 + Math.min(dist | 0, 999999);
     this.queue.push(node);
   }
 

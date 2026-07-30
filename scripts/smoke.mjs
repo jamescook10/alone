@@ -86,7 +86,6 @@ if (ready) {
     } catch (e) {
       err = e.message + ' @ ' + (e.stack || '').split('\n')[1];
     }
-    const r = g.engine.renderer.info;
     return {
       err,
       frameErrors: g.errors.count,
@@ -95,11 +94,20 @@ if (ready) {
       animals: w.wildlife.animals.length,
       chunks: w.terrain.chunksLoaded,
       trees: w.flora.barkPools.reduce((a, p) => a + (p ? p.mesh.count : 0), 0),
-      calls: r.render.calls,
-      tris: r.render.triangles,
-      pixels: g.engine.shadedPixels,
     };
   });
+
+  // Let the renderer actually draw the fully-streamed world before reading
+  // draw stats: renderer.info holds the LAST rendered frame, and right after
+  // the sim burst that can still be an early loading frame with nothing in it.
+  await page.waitForTimeout(8000);
+  const draw = await page.evaluate(() => {
+    const g = window.__game;
+    g.engine.render(0.016);
+    const r = g.engine.renderer.info;
+    return { calls: r.render.calls, tris: r.render.triangles, pixels: g.engine.shadedPixels };
+  });
+  Object.assign(sim, draw);
 
   if (sim.err) fail.push('world.update threw: ' + sim.err);
   if (sim.frameErrors > 0) fail.push(sim.frameErrors + ' frame errors: ' + sim.lastError);

@@ -157,15 +157,17 @@ class MeshBuilder {
 
 /* ------------------------------------------------------------ tree recipes */
 
+// Bark reflectances sit a third higher than the first pass: at the old
+// values, trunks metered as pure black cutouts against any daytime sky.
 const BARK = {
-  oak: [0.115, 0.084, 0.057],
-  pine: [0.095, 0.065, 0.046],
+  oak: [0.152, 0.112, 0.076],
+  pine: [0.126, 0.087, 0.061],
   birch: [0.702, 0.682, 0.634],
-  palm: [0.189, 0.149, 0.097],
-  acacia: [0.155, 0.124, 0.084],
+  palm: [0.224, 0.177, 0.116],
+  acacia: [0.190, 0.152, 0.104],
   cactus: [0.084, 0.155, 0.074],
-  dead: [0.176, 0.155, 0.132],
-  jungle: [0.142, 0.121, 0.095],
+  dead: [0.204, 0.180, 0.154],
+  jungle: [0.176, 0.150, 0.118],
 };
 const LEAF = {
   oak: [0.108, 0.201, 0.056],
@@ -493,7 +495,8 @@ export class Flora {
       uniforms: this.growUniform,
     });
     this.leafMat = makeFoliageMaterial({
-      key: 'leaf', stiffness: 0.11, sway: 1.0, doubleSide: true,
+      key: 'leaf', stiffness: 0.11, sway: 1.0, doubleSide: true, translucency: 0.85,
+      colorVar: 0.55,
       uniforms: this.growUniform,
     });
     this._patchGrowth(this.barkMat);
@@ -566,7 +569,7 @@ export class Flora {
   _buildGrass() {
     const tex = grassTexture();
     const mat = makeFoliageMaterial({
-      key: 'grass', stiffness: 0.55, sway: 2.6, doubleSide: true,
+      key: 'grass', stiffness: 0.55, sway: 2.6, doubleSide: true, translucency: 1.30,
       alphaTest: 0.42, map: tex, uniforms: this.growUniform,
     });
     mat.map.wrapS = mat.map.wrapT = THREE.ClampToEdgeWrapping;
@@ -579,12 +582,14 @@ export class Flora {
     const idx = [];
     const H = 0.42;
     const W = 0.27;
-    for (let k = 0; k < 2; k++) {
-      const a = (k / 2) * Math.PI;
+    for (let k = 0; k < 3; k++) {
+      const a = (k / 3) * Math.PI;
       const dx = Math.cos(a) * W, dz = Math.sin(a) * W;
       const b = pos.length / 3;
       pos.push(-dx, 0, -dz, dx, 0, dz, dx, H, dz, -dx, H, -dz);
-      for (let i = 0; i < 4; i++) nrm.push(-Math.sin(a), 0.35, Math.cos(a));
+      // Normals lean well upward: blades shade like the meadow they stand
+      // in, instead of metering as dark side-lit fins against bright ground.
+      for (let i = 0; i < 4; i++) nrm.push(-Math.sin(a) * 0.55, 0.78, Math.cos(a) * 0.55);
       uv.push(0, 0, 1, 0, 1, 1, 0, 1);
       idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
     }
@@ -594,7 +599,7 @@ export class Flora {
     g.setAttribute('color', new THREE.Float32BufferAttribute(new Array(pos.length).fill(1), 3));
     g.setIndex(idx);
     g.computeBoundingSphere();
-    this.grassPool = new Pool(g, mat, 72000, this.scene);
+    this.grassPool = new Pool(g, mat, 84000, this.scene);
     this.grassPool.mesh.castShadow = false;
     this.grassPool.mesh.receiveShadow = false;
   }
