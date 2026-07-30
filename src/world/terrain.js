@@ -152,7 +152,25 @@ export class Terrain {
 
   /* --------------------------------------------------------------- update */
 
-  update(camPos) {
+  update(camPos, force = false) {
+    // The quadtree only changes when you move, so there is no point walking a
+    // few hundred nodes on a frame where you have not.
+    if (!force) {
+      const moved = this._lastUpdatePos
+        ? Math.hypot(camPos.x - this._lastUpdatePos.x, camPos.y - this._lastUpdatePos.y, camPos.z - this._lastUpdatePos.z)
+        : Infinity;
+      this._updateSkip = (this._updateSkip || 0) + 1;
+      if (moved < 3 && this._updateSkip < 12 && this.queue.length === 0) {
+        this._pump();
+        return;
+      }
+      this._updateSkip = 0;
+      if (!this._lastUpdatePos) this._lastUpdatePos = { x: 0, y: 0, z: 0 };
+      this._lastUpdatePos.x = camPos.x;
+      this._lastUpdatePos.y = camPos.y;
+      this._lastUpdatePos.z = camPos.z;
+    }
+
     // Roots form an infinite grid; only those near the player exist.
     const ri = Math.floor(camPos.x / ROOT_SIZE);
     const rj = Math.floor(camPos.z / ROOT_SIZE);

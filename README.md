@@ -120,7 +120,8 @@ swells at dawn and on summits, and goes quiet when you walk into a town.
 | `M` | mute |
 | `O` | cycle the weather |
 | `[` `]` | wind time back and forward |
-| `Esc` | pause and settings |
+| `Tab` | pause and settings |
+| `Esc` | releases the mouse (browser behaviour) — click the view to take it back |
 
 Touch is supported: drag the left half of the screen to move, the right half to
 look, tap to interact.

@@ -580,3 +580,33 @@ body {
   #status, #place { font-size: 10.5px; }
   .slot { width: 44px; height: 44px; font-size: 17px; }
 }
+
+/* ------------------------------------------------------- mouse capture --- */
+
+#capture {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  text-align: center;
+}
+
+#capture span {
+  display: inline-block;
+  font-size: 12.5px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(8, 12, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 30px;
+  padding: 11px 26px;
+  backdrop-filter: blur(8px);
+  animation: capturePulse 2.6s ease-in-out infinite;
+}
+
+@keyframes capturePulse {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 1; }
+}

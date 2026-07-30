@@ -9,7 +9,10 @@ export class Input {
     this.mouseDX = 0;
     this.mouseDY = 0;
     this.wheel = 0;
-    this.locked = false;
+    // The lock may already be held: main asks for it inside the click that
+    // starts the game, which is before this object exists.
+    this.locked = document.pointerLockElement === canvas;
+    this.lockError = null;
     this.buttons = [false, false, false];
     this.clicked = [false, false, false];
     this.sensitivity = 0.0022;
@@ -43,6 +46,15 @@ export class Input {
       this.buttons = [false, false, false];
     });
 
+    // Clicking the view always takes the mouse back. Browsers drop pointer
+    // lock for all sorts of reasons - Escape, alt-tab, a notification - and
+    // without this there is no way to get it again.
+    this._on(this.canvas, 'pointerdown', (e) => {
+      if (!this.locked && this.enabled) {
+        this.requestLock();
+        e.preventDefault();
+      }
+    });
     this._on(this.canvas, 'mousedown', (e) => {
       if (!this.locked) return;
       this.buttons[e.button] = true;
@@ -57,12 +69,18 @@ export class Input {
       this.mouseDY += e.movementY || 0;
     });
     this._on(this.canvas, 'wheel', (e) => {
+      if (!this.gameplayActive) return;
       this.wheel += Math.sign(e.deltaY);
       e.preventDefault();
     }, { passive: false });
     this._on(document, 'pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.canvas;
+      if (this.locked) this.lockError = null;
       if (this.onLockChange) this.onLockChange(this.locked);
+    });
+    this._on(document, 'pointerlockerror', () => {
+      this.lockError = 'the browser refused to capture the mouse';
+      if (this.onLockChange) this.onLockChange(false);
     });
     this._on(document, 'contextmenu', (e) => {
       if (this.locked) e.preventDefault();
@@ -121,11 +139,31 @@ export class Input {
     });
   }
 
+  /**
+   * Must be called from inside a user gesture - browsers reject it otherwise,
+   * which is why the canvas pointerdown handler above exists.
+   */
   requestLock() {
-    if (this.canvas.requestPointerLock) {
+    if (this.locked || !this.canvas.requestPointerLock) return;
+    try {
+      // Raw mouse input where it is offered; plain lock everywhere else.
       const r = this.canvas.requestPointerLock({ unadjustedMovement: true });
-      if (r && r.catch) r.catch(() => this.canvas.requestPointerLock());
+      if (r && r.catch) {
+        r.catch(() => {
+          try {
+            const r2 = this.canvas.requestPointerLock();
+            if (r2 && r2.catch) r2.catch(() => {});
+          } catch (e) { /* nothing more we can do from here */ }
+        });
+      }
+    } catch (e) {
+      try { this.canvas.requestPointerLock(); } catch (e2) { /* ignore */ }
     }
+  }
+
+  /** True when the mouse (or a finger) is actually driving the game. */
+  get gameplayActive() {
+    return this.locked || this.touch.active;
   }
 
   exitLock() {
@@ -141,6 +179,11 @@ export class Input {
 
   /** Movement intent in local space: x = strafe, y = forward. */
   axes(out = { x: 0, y: 0 }) {
+    if (!this.gameplayActive) {
+      out.x = 0;
+      out.y = 0;
+      return out;
+    }
     let x = this.move.x;
     let y = this.move.y;
     if (this.down('KeyW') || this.down('ArrowUp')) y += 1;

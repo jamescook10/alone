@@ -60,11 +60,11 @@ export class World {
     // A flat plate of water far beyond the streamed chunks, so the ocean
     // reaches the horizon instead of stopping at the edge of the world.
     const disc = new THREE.Mesh(
-      new THREE.RingGeometry(1500, 260000, 96, 1),
-      new THREE.MeshBasicMaterial({ color: 0x0b2a34, depthWrite: false, fog: false })
+      new THREE.RingGeometry(900, 260000, 96, 1),
+      new THREE.MeshBasicMaterial({ color: 0x0b2a34, depthWrite: true, fog: false })
     );
     disc.rotation.x = -Math.PI / 2;
-    disc.renderOrder = 3;
+    disc.renderOrder = 2;
     disc.frustumCulled = false;
     this.horizonSea = disc;
     engine.scene.add(disc);
@@ -93,7 +93,7 @@ export class World {
 
     // The far ocean plate follows you and takes the colour of the water you
     // would see at that distance.
-    this.horizonSea.position.set(p.position.x, -0.4, p.position.z);
+    this.horizonSea.position.set(p.position.x, -2.2, p.position.z);
     const hz = this.sky.horizonColor;
     this.horizonSea.material.color.setRGB(
       hz.r * 0.55 + 0.004,

@@ -45,7 +45,8 @@ title.innerHTML = `
   <div class="hint">
     <b>W A S D</b> walk &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>Space</b> jump &nbsp;·&nbsp; <b>Mouse</b> look<br />
     <b>E</b> use what is in front of you &nbsp;·&nbsp; <b>Q</b> second action &nbsp;·&nbsp; <b>1–9</b> what you hold<br />
-    <b>F</b> drift &nbsp;·&nbsp; <b>J</b> journal &nbsp;·&nbsp; <b>P</b> photo &nbsp;·&nbsp; <b>Esc</b> pause<br />
+    <b>F</b> drift &nbsp;·&nbsp; <b>J</b> journal &nbsp;·&nbsp; <b>P</b> photo &nbsp;·&nbsp; <b>Tab</b> pause<br />
+    <span style="opacity:.72">If the mouse comes loose, click the view to take it back.</span><br />
     <span style="opacity:.72">Everything is generated as you go. Nothing here wants anything from you.<br />
     Best with headphones — the sound is fully three-dimensional.</span>
   </div>
@@ -74,7 +75,16 @@ let frame = 0;
 let fps = 0;
 let last = performance.now();
 
-title.querySelector('#begin').addEventListener('click', () => start());
+title.querySelector('#begin').addEventListener('click', () => {
+  // Ask for the mouse from inside the click itself. This is the only moment a
+  // browser will reliably grant pointer lock; asking later, from a timer after
+  // the world has loaded, is refused every time.
+  try {
+    const r = canvas.requestPointerLock();
+    if (r && r.catch) r.catch(() => {});
+  } catch (e) { /* the canvas click handler will offer it again */ }
+  start();
+});
 seedIn.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') start();
 });
@@ -109,17 +119,16 @@ function boot(loading) {
   world.audio = audio;
   audio.resume();
 
-  // Losing the pointer pauses - which is what you want if you tab away - but
-  // only once we have actually held it. A browser that refuses the very first
-  // lock request must not leave the world frozen.
-  let hadLock = false;
-  input.onLockChange = (locked) => {
-    if (locked) {
-      hadLock = true;
-      return;
-    }
-    if (hadLock && running && !world.paused && !ui.photo) ui.togglePause();
-  };
+  // Losing the pointer no longer throws up a menu. The world keeps breathing,
+  // movement stops, and a quiet line invites you to click and carry on. This
+  // matters on macOS especially, where Escape both releases the mouse and
+  // drops you out of fullscreen - a pause menu on top of that is a mess.
+  input.onLockChange = () => {};
+
+  // Tabbing away is a different thing entirely, and that should pause.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && running && world && !world.paused) ui.togglePause();
+  });
 
   world.note('You are the only one here.', 'event');
   world.note(`This world is #${seed.toString(36)}. It has always been here.`, 'note');
@@ -136,7 +145,6 @@ function boot(loading) {
       setTimeout(() => title.remove(), 1800);
       ui.showHud(true);
       ui.fade(1, 2.6);
-      input.requestLock();
       running = true;
     } else {
       setTimeout(waitForGround, 90);
@@ -166,7 +174,9 @@ function loop() {
 
   /* global keys */
   if (input) {
-    if (input.hit('Escape')) ui.togglePause();
+    // Tab, not Escape: Escape is the browser's own "release the mouse", and on
+    // macOS it also leaves fullscreen. Let it do only that.
+    if (input.hit('Tab')) ui.togglePause();
     if (input.hit('KeyJ')) ui.toggleJournal();
     if (input.hit('KeyP')) ui.togglePhoto();
     if (input.hit('KeyM') && audio) {
@@ -195,6 +205,8 @@ function loop() {
     lastError = err;
   }
 
+  ui.fps = smoothed;
+  ui.setCaptureHint(running && input && !input.gameplayActive && !world.paused);
   ui.update(dt);
   engine.render(dt);
   if (input) input.endFrame();
@@ -210,7 +222,7 @@ let lastError = null;
 
 function autoQuality() {
   if (qualityStep >= 3) return;
-  if (smoothed > 26) return;
+  if (smoothed > 40) return;
   qualityStep++;
   if (qualityStep === 1) engine.setQuality({ pixelRatio: Math.max(0.7, engine.quality.pixelRatio * 0.75) });
   else if (qualityStep === 2) engine.setQuality({ bloom: false });

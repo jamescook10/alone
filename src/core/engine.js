@@ -84,11 +84,26 @@ const GradeShader = {
   `,
 };
 
+/**
+ * How many pixels we are willing to shade. A retina laptop reports a device
+ * pixel ratio of 2, which means four times the fragments of a 1x buffer - and
+ * with a full post chain on top, that is the single biggest cost in the whole
+ * renderer. Pick a ratio that keeps the shaded pixel count near a budget.
+ */
+export function defaultPixelRatio(budget = 2600000) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, window.innerWidth);
+  const h = Math.max(1, window.innerHeight);
+  let pr = Math.min(dpr, 1.5);
+  while (pr > 0.7 && w * h * pr * pr > budget) pr -= 0.1;
+  return Math.max(0.7, Math.round(pr * 100) / 100);
+}
+
 export class Engine {
   constructor(canvas, quality = {}) {
     this.canvas = canvas;
     this.quality = Object.assign(
-      { shadows: true, bloom: true, pixelRatio: Math.min(window.devicePixelRatio || 1, 2), shadowSize: 1536 },
+      { shadows: true, bloom: true, pixelRatio: defaultPixelRatio(), shadowSize: 1536 },
       quality
     );
 
@@ -97,7 +112,11 @@ export class Engine {
       antialias: true,
       powerPreference: 'high-performance',
       stencil: false,
-      logarithmicDepthBuffer: true,
+      // Deliberately NOT a logarithmic depth buffer. It writes gl_FragDepth in
+      // every fragment shader, which switches off early-Z rejection on every
+      // GPU - very expensive in a forest, where overdraw is the whole problem.
+      // A 0.3 m near plane gives enough precision without it.
+      logarithmicDepthBuffer: false,
     });
     this.renderer.setPixelRatio(this.quality.pixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -111,7 +130,7 @@ export class Engine {
     this.scene = new THREE.Scene();
     this.scene.fog = null; // we do our own aerial perspective
 
-    this.camera = new THREE.PerspectiveCamera(68, 1, 0.12, 42000);
+    this.camera = new THREE.PerspectiveCamera(68, 1, 0.3, 30000);
     this.camera.rotation.order = 'YXZ';
 
     // A single shadow-casting sun that follows the player. Its frustum is
@@ -147,9 +166,12 @@ export class Engine {
   _setupComposer() {
     const size = new THREE.Vector2();
     this.renderer.getSize(size);
+    // Multisampling and supersampling do the same job. If we are already
+    // shading above 1x, spend the budget there instead of on MSAA samples.
+    const pr = this.quality.pixelRatio;
     const rt = new THREE.WebGLRenderTarget(Math.max(2, size.x), Math.max(2, size.y), {
       type: THREE.HalfFloatType,
-      samples: 4,
+      samples: pr >= 1.45 ? 0 : pr >= 1.15 ? 2 : 4,
       colorSpace: THREE.LinearSRGBColorSpace,
     });
     this.composer = new EffectComposer(this.renderer, rt);
@@ -172,10 +194,19 @@ export class Engine {
     this.renderer.setPixelRatio(this.quality.pixelRatio);
     this.renderer.setSize(w, h, false);
     this.composer.setSize(w, h);
+    // Bloom is a wide, soft, low-frequency effect: half resolution is
+    // indistinguishable and costs a quarter of the fill rate.
+    if (this.bloom) this.bloom.setSize(Math.max(2, w * 0.5), Math.max(2, h * 0.5));
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     const pr = this.renderer.getPixelRatio();
     this.grade.uniforms.uResolution.value.set(w * pr, h * pr);
+  }
+
+  /** Pixels actually shaded per frame, for the on-screen readout. */
+  get shadedPixels() {
+    const pr = this.renderer.getPixelRatio();
+    return Math.round(window.innerWidth * pr * window.innerHeight * pr);
   }
 
   setQuality(q) {

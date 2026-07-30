@@ -20,8 +20,10 @@ const HELP = [
   ['J', 'journal'],
   ['P', 'photo mode'],
   ['M', 'mute'],
-  ['H then Esc', 'release the mouse'],
-  ['Esc', 'pause'],
+  ['O', 'cycle the weather'],
+  ['[ ]', 'wind time back and forward'],
+  ['Tab', 'pause and settings'],
+  ['Esc', 'release the mouse — click to take it back'],
 ];
 
 export class UI {
@@ -56,6 +58,7 @@ export class UI {
         <div id="toast"></div>
         <div id="discovery"><div class="big"></div><div class="sub"></div></div>
       </div>
+      <div id="capture" class="hidden"><span>click to look around</span></div>
       <div id="journal" class="panel hidden"><div class="inner">
         <h2>Journal</h2>
         <div class="list"></div>
@@ -77,6 +80,8 @@ export class UI {
         <div class="row"><span class="toggle" data-t="grain">film grain</span><b class="v-grain"></b></div>
         <div class="row"><span class="toggle" data-t="sound">sound</span><b class="v-sound"></b></div>
         <div class="row"><span class="toggle" data-t="res">resolution</span><b class="v-res"></b></div>
+        <div class="row"><span class="toggle" data-t="fullscreen">fullscreen</span><b class="v-fullscreen"></b></div>
+        <div class="row"><span>drawing</span><b class="v-perf"></b></div>
         <button class="btn close">continue</button>
       </div></div>
       <div id="photomode" class="hidden"></div>
@@ -94,6 +99,8 @@ export class UI {
     this.journalList = this.root.querySelector('#journal .list');
     this.pauseEl = this.root.querySelector('#pause');
     this.photoEl = this.root.querySelector('#photomode');
+    this.captureEl = this.root.querySelector('#capture');
+    this.fps = 0;
     this.vitals = {
       breath: this.root.querySelector('.bar.breath i'),
       warmth: this.root.querySelector('.bar.warmth i'),
@@ -157,10 +164,20 @@ export class UI {
         }
         break;
       case 'res': {
-        const cur = q.pixelRatio;
-        const max = Math.min(window.devicePixelRatio || 1, 2);
-        const next = cur >= max ? 0.65 : cur < 0.9 ? 1 : max;
-        e.setQuality({ pixelRatio: next });
+        // Step through the sensible range rather than jumping to the extremes.
+        const steps = [0.7, 0.85, 1.0, 1.25, 1.5, Math.min(window.devicePixelRatio || 1, 2)];
+        const uniq = [...new Set(steps.map((v) => Math.round(v * 100) / 100))].sort((a, b) => a - b);
+        const i = uniq.findIndex((v) => v > q.pixelRatio + 0.01);
+        e.setQuality({ pixelRatio: i < 0 ? uniq[0] : uniq[i] });
+        break;
+      }
+      case 'fullscreen': {
+        if (document.fullscreenElement) {
+          if (document.exitFullscreen) document.exitFullscreen();
+        } else if (document.documentElement.requestFullscreen) {
+          const r = document.documentElement.requestFullscreen();
+          if (r && r.catch) r.catch(() => {});
+        }
         break;
       }
     }
@@ -178,6 +195,8 @@ export class UI {
     set('grain', e.grade.uniforms.uGrain.value > 0.001 ? 'on' : 'off');
     set('sound', this.world.audio && this.world.audio.enabled ? 'on' : 'off');
     set('res', e.quality.pixelRatio.toFixed(2) + '×');
+    set('fullscreen', document.fullscreenElement ? 'on' : 'off');
+    set('perf', `${(e.shadedPixels / 1e6).toFixed(1)}M px · ${this.fps.toFixed(0)} fps`);
   }
 
   /* ------------------------------------------------------------- messages */
@@ -221,6 +240,13 @@ export class UI {
 
   showHud(on) {
     this.hud.classList.toggle('on', on);
+  }
+
+  /** The quiet line that tells you the mouse is loose. */
+  setCaptureHint(on) {
+    if (this._capture === on) return;
+    this._capture = on;
+    this.captureEl.classList.toggle('hidden', !on);
   }
 
   togglePause() {
@@ -295,6 +321,7 @@ export class UI {
         `<span class="k">air</span>${p.temperature.toFixed(0)}°C`,
         `<span class="k">altitude</span>${alt > 0 ? alt.toFixed(0) : alt.toFixed(0)} m`,
         `<span class="k">bearing</span>${fmtBearing(p.heading)}`,
+        `<span class="k">frames</span>${this.fps.toFixed(0)} fps`,
       ].join('<br>');
 
       this.vitals.breath.style.width = `${p.breath * 100}%`;
