@@ -10,6 +10,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export const assets = {
   trees: null, // { name: { bark, leaf, farBark, farLeaf, tex: {bark, leaf} } }
+  terrain: false, // true when the baked terrain splat sets are present
   texture: null, // (path, {srgb}) -> THREE.Texture, cached
 };
 
@@ -73,6 +74,13 @@ export async function loadAssets(base = 'assets/') {
   } catch (e) {
     console.warn('baked trees unavailable, using procedural builders:', e.message);
     assets.trees = null;
+  }
+
+  try {
+    const res = await fetch(base + 'terrain/MANIFEST.json');
+    assets.terrain = res.ok;
+  } catch {
+    assets.terrain = false;
   }
   return assets;
 }

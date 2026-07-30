@@ -310,6 +310,19 @@ export class Sky {
     this.mesh.renderOrder = -1000;
     engine.scene.add(this.mesh);
 
+    // Environment probe: the same sky shader rendered into a small cubemap
+    // and prefiltered, so every rough or wet surface picks up real sky
+    // reflection that tracks the time of day. Refreshed every couple of
+    // seconds - the sun does not move faster than that.
+    this._envScene = new THREE.Scene();
+    this._envScene.add(new THREE.Mesh(geo, mat));
+    this._envRT = new THREE.WebGLCubeRenderTarget(64, { type: THREE.HalfFloatType });
+    this._envCam = new THREE.CubeCamera(0.1, 50, this._envRT);
+    this._pmrem = new THREE.PMREMGenerator(engine.renderer);
+    this._pmrem.compileCubemapShader();
+    this._envOut = null;
+    this._envT = 0;
+
     this.sunDir = new THREE.Vector3();
     this.moonDir = new THREE.Vector3();
     this.sunColor = new THREE.Color();
@@ -400,6 +413,18 @@ export class Sky {
     const drift = dt * 0.0011;
     atmo.uCloudOff.value.x += (weather ? weather.windDir.x : 1) * drift;
     atmo.uCloudOff.value.y += (weather ? weather.windDir.y : 0.2) * drift;
+
+    this._envT -= dt;
+    if (this._envT <= 0) {
+      this._envT = 2.0;
+      const renderer = this.engine.renderer;
+      this._envCam.update(renderer, this._envScene);
+      const out = this._pmrem.fromCubemap(this._envRT.texture);
+      if (this._envOut) this._envOut.dispose();
+      this._envOut = out;
+      this.engine.scene.environment = out.texture;
+    }
+    this.engine.scene.environmentIntensity = this.uniforms.uUnderwater.value > 0.5 ? 0.08 : 0.5;
 
     if (camera) this.mesh.position.copy(camera.position);
   }

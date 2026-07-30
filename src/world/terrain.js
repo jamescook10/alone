@@ -82,7 +82,7 @@ export class Terrain {
     geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
-    geo.setAttribute('aux', new THREE.BufferAttribute(data.aux, 2));
+    geo.setAttribute('aux', new THREE.BufferAttribute(data.aux, 4));
     geo.setIndex(new THREE.BufferAttribute(data.indices, 1));
     geo.boundingSphere = new THREE.Sphere(
       new THREE.Vector3(data.size / 2, (data.minY + data.maxY) / 2, data.size / 2),

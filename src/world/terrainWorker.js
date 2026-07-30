@@ -72,7 +72,7 @@ function build(req) {
   const positions = new Float32Array(totalVerts * 3);
   const normals = new Float32Array(totalVerts * 3);
   const colors = new Float32Array(totalVerts * 3);
-  const aux = new Float32Array(totalVerts * 2); // x: wetness, y: sand/rock blend
+  const aux = new Float32Array(totalVerts * 4); // wetness, slope, sand, snow
 
   const col = [0, 0, 0];
   for (let j = 0; j <= res; j++) {
@@ -103,15 +103,17 @@ function build(req) {
       normals[vi * 3 + 2] = nz * il;
 
       const slope = 1 - ny * il;
-      groundColor(wx, wz, h, gbiome[gi], gtemp[gi], gmoist[gi], slope, gwater[gi], griver[gi], groad[gi], gtown[gi], col);
+      groundColor(wx, wz, h, gbiome[gi], gtemp[gi], gmoist[gi], slope, gwater[gi], griver[gi], groad[gi], gtown[gi], col, MATW);
       colors[vi * 3] = col[0];
       colors[vi * 3 + 1] = col[1];
       colors[vi * 3 + 2] = col[2];
 
       const wl = gwater[gi];
       const wet = wl > -9999 ? saturate((wl - h + 1.2) / 2.4) : saturate(1 - Math.abs(h - SEA_LEVEL) / 1.8) * 0.5;
-      aux[vi * 2] = wet;
-      aux[vi * 2 + 1] = slope;
+      aux[vi * 4] = wet;
+      aux[vi * 4 + 1] = slope;
+      aux[vi * 4 + 2] = MATW[0];
+      aux[vi * 4 + 3] = MATW[1];
     }
   }
 
@@ -136,8 +138,10 @@ function build(req) {
     colors[sv * 3] = DEBUG_SKIRT ? 1 : colors[src * 3] * 0.8;
     colors[sv * 3 + 1] = DEBUG_SKIRT ? 0 : colors[src * 3 + 1] * 0.8;
     colors[sv * 3 + 2] = DEBUG_SKIRT ? 0 : colors[src * 3 + 2] * 0.8;
-    aux[sv * 2] = aux[src * 2];
-    aux[sv * 2 + 1] = aux[src * 2 + 1];
+    aux[sv * 4] = aux[src * 4];
+    aux[sv * 4 + 1] = aux[src * 4 + 1];
+    aux[sv * 4 + 2] = aux[src * 4 + 2];
+    aux[sv * 4 + 3] = aux[src * 4 + 3];
     sv++;
   }
 
@@ -203,8 +207,14 @@ function build(req) {
 /* ------------------------------------------------------------ ground colour */
 
 const TMPC = [0, 0, 0];
+const MATW = [0, 0]; // sand, snow weights for the texture splat
 
-function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road, town, out) {
+function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road, town, out, matw) {
+  if (matw) {
+    // Sand covers deserts and beaches outright; shorelines add it below.
+    matw[0] = (biome === BIOME.DESERT || biome === BIOME.BEACH) ? 1 - smoothstep(0.30, 0.60, slope) : 0;
+    matw[1] = 0;
+  }
   const info = BIOME_INFO[biome];
   // Two-tone base with a large-scale patchiness so ground is never flat.
   const v = hashNoise(x * 0.021, z * 0.021) * 0.5 + hashNoise(x * 0.0043, z * 0.0043) * 0.5;
@@ -228,6 +238,7 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
   // Snow settles on cold, flat, high ground.
   const snowLine = smoothstep(2.0, -4.0, temp);
   const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope));
+  if (matw) matw[1] = snow;
   if (snow > 0.01) {
     r = lerp(r, 0.70, snow);
     g = lerp(g, 0.74, snow);
@@ -239,6 +250,7 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
     const d = waterLevel - h;
     if (d > -1.6) {
       const shore = saturate(1 - Math.abs(d) / 2.2);
+      if (matw) matw[0] = Math.max(matw[0], shore);
       r = lerp(r, 0.300, shore * 0.6);
       g = lerp(g, 0.262, shore * 0.6);
       b = lerp(b, 0.185, shore * 0.6);

@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { atmo, injectAtmosphere, ATMO_PARS, WIND_PARS } from './atmosphere.js';
 import { Noise } from '../core/noise.js';
+import { assets } from './assets.js';
 
 /* ---------------------------------------------------------- textures */
 
@@ -110,12 +111,13 @@ export function makeTerrainMaterial() {
     metalness: 0.0,
     dithering: true,
   });
+  if (assets.terrain) return makeSplatTerrainMaterial(mat, detail);
   injectAtmosphere(mat, {
     key: 'terrain',
     uniforms: { tDetail: { value: detail } },
     vertexPars: /* glsl */ `
-      attribute vec2 aux;
-      varying vec2 vAux;
+      attribute vec4 aux;
+      varying vec4 vAux;
     `,
     vertexBody: `vAux = aux;`,
     fragmentPars: /* glsl */ `
@@ -124,7 +126,7 @@ export function makeTerrainMaterial() {
       uniform float uWetness;
       uniform float uWaterY;
       uniform float uCaustics;
-      varying vec2 vAux;
+      varying vec4 vAux;
       float terrainWetness() {
         return clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
       }
@@ -179,6 +181,114 @@ export function makeTerrainMaterial() {
           float caus = pow( max( 0.0, 1.0 - abs( c1 - c2 ) * 4.5 ), 3.0 );
           float atten = exp( -below * 0.055 );
           diffuseColor.rgb += vec3( 0.55, 0.85, 0.8 ) * caus * atten * 0.5;
+        }
+      }
+    `,
+  });
+  return mat;
+}
+
+/**
+ * The textured terrain: baked grass/rock/sand/snow sets splatted by the
+ * weights the mesh worker writes into the aux attribute (wetness, slope,
+ * sand, snow). Albedo multiplies the biome vertex colour, so the palette -
+ * and the physically-scaled reflectances it was tuned around - survive.
+ */
+function makeSplatTerrainMaterial(mat, detail) {
+  const t = assets.texture;
+  injectAtmosphere(mat, {
+    key: 'terrainsplat',
+    uniforms: {
+      tDetail: { value: detail },
+      tGrassC: { value: t('terrain/grass_color.jpg') },
+      tGrassNR: { value: t('terrain/grass_nr.jpg', { srgb: false }) },
+      tRockC: { value: t('terrain/rock_color.jpg') },
+      tRockNR: { value: t('terrain/rock_nr.jpg', { srgb: false }) },
+      tSandC: { value: t('terrain/sand_color.jpg') },
+      tSandNR: { value: t('terrain/sand_nr.jpg', { srgb: false }) },
+      tSnowC: { value: t('terrain/snow_color.jpg') },
+      tSnowNR: { value: t('terrain/snow_nr.jpg', { srgb: false }) },
+    },
+    vertexPars: /* glsl */ `
+      attribute vec4 aux;
+      varying vec4 vAux;
+    `,
+    vertexBody: `vAux = aux;`,
+    fragmentPars: /* glsl */ `
+      uniform sampler2D tDetail;
+      uniform sampler2D tGrassC, tGrassNR, tRockC, tRockNR, tSandC, tSandNR, tSnowC, tSnowNR;
+      uniform float uTime;
+      uniform float uWetness;
+      uniform float uWaterY;
+      uniform float uCaustics;
+      uniform float uSnowAmount;
+      varying vec4 vAux;
+      float terrainWetness() {
+        return clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
+      }
+    `,
+    // Weights and albedo. The locals declared here (gTp, gW*, gTexFade) are
+    // still in scope for the roughness and normal chunks below - all of
+    // main() is one function body.
+    colorFragment: /* glsl */ `
+      vec2 gTp = vWorldPos.xz * 0.34;
+      float gWRock = smoothstep( 0.30, 0.62, vAux.y );
+      float gDynSnow = clamp( uSnowAmount * ( 1.0 - vAux.y * 1.3 ), 0.0, 1.0 );
+      float gWSnow = clamp( vAux.w + gDynSnow, 0.0, 1.0 ) * ( 1.0 - gWRock * 0.55 );
+      float gWSand = vAux.z * ( 1.0 - gWRock ) * ( 1.0 - gWSnow );
+      float gWGrass = max( 1.0 - gWRock - gWSnow - gWSand, 0.0 );
+      float gWSum = gWRock + gWSnow + gWSand + gWGrass;
+      float gTexFade = exp( -length( cameraPosition - vWorldPos ) * 0.0035 );
+      {
+        vec3 splat = ( texture2D( tGrassC, gTp ).rgb * gWGrass
+                     + texture2D( tRockC, gTp * 0.62 ).rgb * gWRock
+                     + texture2D( tSandC, gTp * 1.15 ).rgb * gWSand
+                     + texture2D( tSnowC, gTp * 0.8 ).rgb * gWSnow ) / gWSum;
+        splat = mix( vec3( 0.52 ), splat, gTexFade );
+        diffuseColor.rgb *= splat * 1.92;
+        // Fresh snowfall whitens ground the worker baked as bare.
+        diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.72, 0.75, 0.82 ), gDynSnow * 0.85 );
+
+        // Large-scale patchiness from the runtime detail octaves, so the
+        // tiling never reads at landscape scale.
+        vec2 p = vWorldPos.xz;
+        vec3 d1 = texture2D( tDetail, p * 0.048 ).rgb;
+        vec3 d2 = texture2D( tDetail, p * 0.0067 ).rgb;
+        diffuseColor.rgb *= 1.0 + ( ( d1.g - 0.5 ) * 0.30 + ( d2.r - 0.5 ) * 0.40 );
+
+        float wet = terrainWetness();
+        diffuseColor.rgb *= mix( 1.0, 0.62, wet * 0.8 );
+
+        float below = uWaterY - vWorldPos.y;
+        if ( uCaustics > 0.5 && below > 0.0 ) {
+          float t = uTime * 0.55;
+          vec2 q = p * 0.42;
+          float c1 = texture2D( tDetail, q * 0.25 + vec2( t * 0.06, t * 0.04 ) ).b;
+          float c2 = texture2D( tDetail, q * 0.31 - vec2( t * 0.05, t * 0.07 ) ).r;
+          float caus = pow( max( 0.0, 1.0 - abs( c1 - c2 ) * 4.5 ), 3.0 );
+          float atten = exp( -below * 0.055 );
+          diffuseColor.rgb += vec3( 0.55, 0.85, 0.8 ) * caus * atten * 0.5;
+        }
+      }
+    `,
+    roughnessFragment: /* glsl */ `
+      vec3 gNR = ( texture2D( tGrassNR, gTp ).rgb * gWGrass
+                 + texture2D( tRockNR, gTp * 0.62 ).rgb * gWRock
+                 + texture2D( tSandNR, gTp * 1.15 ).rgb * gWSand
+                 + texture2D( tSnowNR, gTp * 0.8 ).rgb * gWSnow ) / gWSum;
+      roughnessFactor = mix( roughnessFactor, clamp( gNR.b * 1.25, 0.05, 1.0 ), gTexFade );
+      roughnessFactor = mix( roughnessFactor, 0.11, terrainWetness() * 0.8 );
+    `,
+    normalFragment: /* glsl */ `
+      {
+        // Splatted normal maps bend the lighting normal; the xz projection
+        // lies on cliffs, so it flattens out with slope, and with distance
+        // where mip-blended normals would only shimmer.
+        float bFade = gTexFade * ( 1.0 - clamp( vAux.y * 1.1, 0.0, 0.75 ) );
+        if ( bFade > 0.02 ) {
+          vec2 tn = gNR.rg * 2.0 - 1.0;
+          vec3 wgrad = vec3( tn.x, 0.0, tn.y ) * ( 0.9 * bFade );
+          normal = normalize( normal + ( viewMatrix * vec4( wgrad, 0.0 ) ).xyz );
         }
       }
     `,
