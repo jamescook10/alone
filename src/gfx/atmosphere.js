@@ -32,6 +32,9 @@ export const atmo = {
   uCloudShadow: { value: 0 },
   uCloudShadowCover: { value: 0.4 },
   uCloudOff: { value: new THREE.Vector2(0, 0) },
+  // Mirrored from the sky so the water's reflection model breathes with the
+  // same humidity the dome uses.
+  uMieK: { value: 0.2 },
 };
 
 export const ATMO_PARS = /* glsl */ `

@@ -298,6 +298,34 @@ function makeSplatTerrainMaterial(mat, detail) {
 
 /* ------------------------------------------------------------ water */
 
+// Shared between the vertex shader and World.waveHeightAt - if these drift
+// apart, the player stops bobbing on the swell they can see.
+export const GERSTNER_WAVES = [
+  // dirX, dirZ, wavelength (m), amplitude (m), steepness
+  [0.80, 0.60, 46, 0.40, 0.34],
+  [-0.55, 0.83, 27, 0.22, 0.40],
+  [0.20, -0.98, 13, 0.10, 0.46],
+  [0.95, -0.31, 6.5, 0.045, 0.50],
+];
+
+const GERSTNER_GLSL = GERSTNER_WAVES.map(([dx, dz, L, A, Q], i) => {
+  const k = (Math.PI * 2) / L;
+  const w = Math.sqrt(9.81 * k);
+  const il = 1 / Math.hypot(dx, dz);
+  return `
+    {
+      vec2 D = vec2( ${(dx * il).toFixed(4)}, ${(dz * il).toFixed(4)} );
+      float kk = ${k.toFixed(5)};
+      float A = ${A.toFixed(3)} * amp;
+      float ph = kk * dot( D, p0 ) + ${w.toFixed(4)} * uTime;
+      float ca = cos( ph ), sa = sin( ph );
+      wp.xz -= D * ( ${Q.toFixed(2)} * A * ca );
+      wp.y += A * sa;
+      crest += sa * ${(A / 0.765).toFixed(3)};
+      grad += D * ( A * kk * ca );
+    }`;
+}).join('\n');
+
 const WATER_VERT = /* glsl */ `
   #include <common>
   #include <logdepthbuf_pars_vertex>
@@ -305,48 +333,33 @@ const WATER_VERT = /* glsl */ `
   attribute float depth;
   uniform float uTime;
   uniform float uWaveScale;
+  uniform float uWindStrength;
   varying vec3 vWorldPos;
   varying vec2 vFlow;
   varying float vDepth;
   varying vec3 vNormalW;
-
-  // Two crossing gerstner-ish swells plus chop. Cheap, but it reads as water.
-  float waveH( vec2 p, float t, out vec2 grad ) {
-    float h = 0.0;
-    grad = vec2( 0.0 );
-    vec2 d1 = normalize( vec2( 0.8, 0.6 ) );
-    vec2 d2 = normalize( vec2( -0.55, 0.83 ) );
-    vec2 d3 = normalize( vec2( 0.2, -0.98 ) );
-    float k1 = 0.055, a1 = 0.62;
-    float k2 = 0.101, a2 = 0.30;
-    float k3 = 0.27, a3 = 0.085;
-    float p1 = dot( p, d1 ) * k1 + t * 0.62;
-    float p2 = dot( p, d2 ) * k2 + t * 0.90;
-    float p3 = dot( p, d3 ) * k3 + t * 1.7;
-    h += sin( p1 ) * a1 + sin( p2 ) * a2 + sin( p3 ) * a3;
-    grad += d1 * ( cos( p1 ) * a1 * k1 );
-    grad += d2 * ( cos( p2 ) * a2 * k2 );
-    grad += d3 * ( cos( p3 ) * a3 * k3 );
-    return h;
-  }
+  varying float vCrest;
 
   void main() {
     vec4 wp = modelMatrix * vec4( position, 1.0 );
     vFlow = flow;
     vDepth = depth;
-    // Waves flatten in the shallows and in rivers, where flow takes over.
+    // Waves flatten in the shallows and in rivers, where flow takes over -
+    // and the sea state follows the wind: glass at dawn, whitecaps in a storm.
     float shore = clamp( depth / 2.5, 0.0, 1.0 );
-    float amp = uWaveScale * shore * ( 1.0 - clamp( length( flow ) * 0.8, 0.0, 0.85 ) );
-    vec2 grad;
-    float h = waveH( wp.xz, uTime, grad );
-    wp.y += h * amp;
-    vec3 n = normalize( vec3( -grad.x * amp * 3.0, 1.0, -grad.y * amp * 3.0 ) );
-    vNormalW = n;
+    float amp = uWaveScale * shore * ( 1.0 - clamp( length( flow ) * 0.8, 0.0, 0.85 ) )
+      * ( 0.45 + clamp( uWindStrength, 0.0, 1.5 ) * 0.75 );
+    vec2 p0 = wp.xz;
+    vec2 grad = vec2( 0.0 );
+    float crest = 0.0;
+    ${'${GERSTNER}'}
+    vNormalW = normalize( vec3( -grad.x, 1.0, -grad.y ) );
+    vCrest = crest;
     vWorldPos = wp.xyz;
     gl_Position = projectionMatrix * viewMatrix * wp;
     #include <logdepthbuf_vertex>
   }
-`;
+`.replace('${GERSTNER}', GERSTNER_GLSL);
 
 const WATER_FRAG = /* glsl */ `
   precision highp float;
@@ -358,9 +371,33 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uDeep;
   uniform vec3 uShallow;
   uniform float uOpacity;
+  uniform float uWindStrength;
+  uniform float uMieK;
   varying vec2 vFlow;
   varying float vDepth;
   varying vec3 vNormalW;
+  varying float vCrest;
+
+  // A compact copy of the sky dome's radiance model (keep the constants in
+  // step with sky.js), so reflections carry the real gradient - blue noon,
+  // amber sunset - instead of a two-colour guess. Cloud cover greys it via
+  // the shared coverage uniform.
+  vec3 skyReflect( vec3 dir ) {
+    float y = max( dir.y, 0.02 );
+    float mu = clamp( dot( dir, uSunDir ), -1.0, 1.0 );
+    float airMass = 1.0 / ( y * 0.60 + 0.28 );
+    float phaseR = 0.0596831 * ( 1.0 + mu * mu );
+    float g = 0.87;
+    float phaseM = min( 0.1193662 * ( ( 1.0 - g * g ) / pow( max( 1.0 + g * g - 2.0 * g * mu, 1e-4 ), 1.5 ) ), 4.0 );
+    float sunPath = 1.0 / ( max( uSunDir.y, 0.0 ) + 0.085 );
+    vec3 betaR = vec3( 5.5, 13.0, 22.4 );
+    vec3 transmit = exp( -betaR * 0.0118 * sunPath );
+    float day = smoothstep( -0.22, 0.10, uSunDir.y );
+    vec3 col = ( betaR * phaseR + vec3( 21.0 ) * phaseM * uMieK ) * airMass * 0.145 * transmit * day;
+    col += vec3( 0.010, 0.016, 0.034 ) * ( 1.0 - day );
+    vec3 grey = mix( uHorizonColor, uZenithColor, 0.5 ) * 1.04;
+    return mix( col, grey, clamp( uCloudShadowCover * 0.85, 0.0, 1.0 ) );
+  }
 
   void main() {
     #include <logdepthbuf_fragment>
@@ -388,7 +425,7 @@ const WATER_FRAG = /* glsl */ `
     fres = 0.035 + fres * 0.95;
 
     vec3 R = reflect( -V, N );
-    vec3 sky = mix( uHorizonColor, uZenithColor, clamp( R.y * 1.25, 0.0, 1.0 ) );
+    vec3 sky = skyReflect( R );
 
     float deepK = clamp( vDepth / 24.0, 0.0, 1.0 );
     deepK = deepK * ( 2.0 - deepK );
@@ -402,12 +439,15 @@ const WATER_FRAG = /* glsl */ `
     float glint = pow( max( dot( N, H ), 0.0 ), 42.0 ) * 0.12;
     col += uSunColor * ( spec * 2.6 + glint );
 
-    // Foam at the shoreline and where the river runs fast.
+    // Foam: shoreline wash, river churn, and wind-torn whitecaps on crests.
     float shoreFoam = smoothstep( 2.4, 0.04, vDepth );
     float churn = smoothstep( 0.55, 1.5, speed );
     float fn = texture2D( tDetail, p * 0.9 - adv * 0.8 + vec2( uTime * 0.04, 0.0 ) ).r;
     float fn2 = texture2D( tDetail, p * 2.1 + adv * 0.3 ).g;
-    float foam = shoreFoam * smoothstep( 0.35, 0.75, fn ) + churn * smoothstep( 0.45, 0.85, fn2 ) * 0.85;
+    float whitecap = smoothstep( 0.72, 1.05, vCrest ) * smoothstep( 0.5, 1.2, uWindStrength );
+    float foam = shoreFoam * smoothstep( 0.35, 0.75, fn )
+      + churn * smoothstep( 0.45, 0.85, fn2 ) * 0.85
+      + whitecap * smoothstep( 0.30, 0.72, fn2 );
     col = mix( col, vec3( 0.93, 0.96, 0.97 ), clamp( foam, 0.0, 0.9 ) );
 
     float alpha = mix( 0.42, 0.94, clamp( vDepth / 1.6, 0.0, 1.0 ) );

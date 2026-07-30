@@ -408,6 +408,7 @@ export class Sky {
       const mieT = saturate(-0.05 + weather.humidity * 0.50 + weather.fog * 1.4 + weather.overcast * 0.40);
       this.mieK = lerp(0.10, 0.46, mieT);
       this.uniforms.uMieK.value = this.mieK;
+      atmo.uMieK.value = this.mieK;
     }
 
     this._computeColors(weather);
