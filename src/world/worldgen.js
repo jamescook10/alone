@@ -48,7 +48,7 @@ export const BIOME_INFO = [
   { name: 'Rainforest', col: [0.058, 0.125, 0.043], col2: [0.084, 0.160, 0.058], trees: 1.35, grass: 0.9,  rocks: 0.14, flowers: 0.5 },
   { name: 'Taiga',      col: [0.102, 0.142, 0.080], col2: [0.133, 0.162, 0.102], trees: 0.75, grass: 0.4,  rocks: 0.35, flowers: 0.15 },
   { name: 'Tundra',     col: [0.217, 0.215, 0.157], col2: [0.275, 0.261, 0.203], trees: 0.05, grass: 0.35, rocks: 0.5, flowers: 0.12 },
-  { name: 'Snowfield',  col: [0.920, 0.920, 0.920], col2: [0.812, 0.892, 0.920], trees: 0.03, grass: 0.02, rocks: 0.4, flowers: 0 },
+  { name: 'Snowfield',  col: [0.760, 0.790, 0.850], col2: [0.660, 0.710, 0.800], trees: 0.03, grass: 0.02, rocks: 0.4, flowers: 0 },
   { name: 'Desert',     col: [0.493, 0.389, 0.225], col2: [0.413, 0.322, 0.186], trees: 0.02, grass: 0.06, rocks: 0.3, flowers: 0.03 },
   { name: 'Savanna',    col: [0.283, 0.258, 0.102], col2: [0.348, 0.307, 0.128], trees: 0.12, grass: 0.8,  rocks: 0.2, flowers: 0.2 },
   { name: 'Wetland',    col: [0.104, 0.142, 0.067], col2: [0.145, 0.167, 0.081], trees: 0.35, grass: 1.2,  rocks: 0.08, flowers: 0.45 },

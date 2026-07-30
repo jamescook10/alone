@@ -39,8 +39,17 @@ const PALETTES = [
   { wall: 'timber', roof: 'thatch', trim: 'timber' },
 ];
 
-const CELL = 2.0; // wall panel width
+const CELL = 2.0;      // wall panel width for houses
+const CELL_TALL = 3.4; // ...and for anything taller than three storeys
 const STOREY = 2.9;
+
+// A city has to stay a city without becoming a million triangles. These are the
+// budgets that keep one drawable: how many buildings it may contain, and a hard
+// ceiling on the pieces they may be built from.
+const MAX_BUILDINGS = [0, 12, 34, 110, 240];
+const MAX_PIECES = 42000;
+const MAX_DOORS = 48;
+const MAX_VEHICLES_PER_DISTRICT = 20;
 
 /* ============================================================== districts */
 
@@ -119,6 +128,7 @@ class District {
     /* plots ------------------------------------------------------------ */
     const placed = [];
     const isCity = t.kind === SETTLEMENT.CITY;
+    let budgetSpent = false;
     for (const st of streets) {
       const len = Math.hypot(st.bx - st.ax, st.bz - st.az);
       const dx = (st.bx - st.ax) / len;
@@ -146,10 +156,15 @@ class District {
           if (s.waterLevel > s.height - 0.4) continue;
           const slope = 1 - terrain.normalAt(cx, cz, TMPV).y;
           if (slope > 0.36) continue;
+          if (this.buildings.length >= MAX_BUILDINGS[t.kind] || this.pieces.length >= MAX_PIECES) {
+            budgetSpent = true;
+            break;
+          }
           placed.push({ x: cx, z: cz, r: plotW * 0.6 });
           const yaw = Math.atan2(-px * side, -pz * side) + Math.PI;
           this._makeBuilding(cx, cz, yaw, plotW, rng, dTown / R, t.kind);
         }
+        if (budgetSpent) break;
         along += plotW + rng.float(3, 11);
       }
       // Street furniture.
@@ -162,13 +177,14 @@ class District {
         this._makeLamp(lx, lz);
       }
       // Parked vehicles.
-      const carStep = isCity ? 16 : 34;
+      const carStep = isCity ? 40 : 34;
       for (let d = rng.float(8, carStep); d < len - 6; d += carStep * rng.float(0.7, 1.8)) {
         if (rng.next() < 0.35) continue;
         const side = rng.next() < 0.5 ? -1 : 1;
         const vx = st.ax + dx * d + px * side * (st.w * 0.55);
         const vz = st.az + dz * d + pz * side * (st.w * 0.55);
         if (Math.hypot(vx - t.x, vz - t.z) > R) continue;
+        if (this.vehicles.length >= MAX_VEHICLES_PER_DISTRICT) break;
         const roll = rng.next();
         const kind = roll < 0.62 ? 'car' : roll < 0.82 ? 'van' : roll < 0.94 ? 'truck' : 'bulldozer';
         this.civ.spawnVehicle(vx, vz, Math.atan2(dz, dx) + (side < 0 ? Math.PI : 0), kind, this);
@@ -261,15 +277,17 @@ class District {
     const isTown = kind >= SETTLEMENT.TOWN;
     // Taller toward the middle of a city.
     let floors = 1;
-    if (isCity) floors = Math.max(1, Math.round(lerp(11, 1.6, Math.pow(distN, 0.65)) * rng.float(0.6, 1.35)));
+    if (isCity) floors = Math.max(1, Math.round(lerp(8, 1.6, Math.pow(distN, 0.65)) * rng.float(0.6, 1.3)));
     else if (isTown) floors = rng.next() < 0.35 ? 2 : rng.next() < 0.75 ? 1 : 3;
     else floors = rng.next() < 0.3 ? 2 : 1;
-    floors = clamp(floors, 1, 16);
+    floors = clamp(floors, 1, 9);
 
-    const wCells = Math.max(3, Math.round(plotW / CELL) - (isCity ? 0 : 1));
+    // Taller buildings get wider panels: nobody inspects the twelfth storey.
+    const cell = floors > 3 ? CELL_TALL : CELL;
+    const wCells = Math.max(3, Math.round(plotW / cell) - (isCity ? 0 : 1));
     const dCells = Math.max(3, Math.round(rng.float(0.62, 1.05) * wCells));
-    const w = wCells * CELL;
-    const d = dCells * CELL;
+    const w = wCells * cell;
+    const d = dCells * cell;
 
     const pal = PALETTES[isCity ? (rng.next() < 0.6 ? 4 : 1) : rng.int(0, PALETTES.length)];
     const wallKey = pal.wall;
@@ -305,13 +323,16 @@ class District {
     // Where the front door goes.
     const doorCell = 1 + rng.int(0, Math.max(1, wCells - 2));
 
-    /* foundation + floors */
+    /* foundation, the floors you can actually reach, and the roof */
     for (let f = 0; f <= floors; f++) {
-      const y = base + f * STOREY;
       const isRoof = f === floors;
+      // Slabs exist for the ground floor, the two above it, and the roof.
+      // The middle of a tower is sealed, so nothing there needs building.
+      if (!isRoof && f > 2) continue;
+      const y = base + f * STOREY;
       const slabKey = isRoof ? roofKey : f === 0 ? 'concrete' : 'wood';
-      const nx = Math.ceil(w / 3.2);
-      const nz = Math.ceil(d / 3.2);
+      const nx = Math.ceil(w / 5.0);
+      const nz = Math.ceil(d / 5.0);
       for (let i = 0; i < nx; i++) {
         for (let j = 0; j < nz; j++) {
           const lx = -w / 2 + (i + 0.5) * (w / nx);
@@ -344,16 +365,21 @@ class District {
           if (isDoor) {
             // A doorway: lintel above, nothing below, and a door you can open.
             this._piece(P[0], y0 + STOREY - 0.4, P[1], pw, 0.4, pd, yaw, wallKey, { building });
-            this._makeDoor(P[0], y0, P[1], yaw, pw * 1.7, building);
+            if (floors <= 3 && this.doors.length < MAX_DOORS) {
+              this._makeDoor(P[0], y0, P[1], yaw, pw * 1.7, building);
+            }
             continue;
           }
           if (wantWindow) {
             const sillH = 0.85;
             const winH = 1.25;
             this._piece(P[0], y0 + sillH * 0.5, P[1], pw, sillH * 0.5, pd, yaw, wallKey, { building });
-            this._piece(P[0], y0 + sillH + winH + (STOREY - sillH - winH) * 0.5, P[1],
-              pw, (STOREY - sillH - winH) * 0.5, pd, yaw, wallKey, { building });
-            this._piece(P[0], y0 + sillH + winH * 0.5, P[1], pw * 0.92, winH * 0.5, pd * 0.4, yaw, 'glass',
+            if (floors <= 3) {
+              this._piece(P[0], y0 + sillH + winH + (STOREY - sillH - winH) * 0.5, P[1],
+                pw, (STOREY - sillH - winH) * 0.5, pd, yaw, wallKey, { building });
+            }
+            this._piece(P[0], y0 + sillH + winH * 0.5, P[1], pw * 0.92,
+              (floors <= 3 ? winH : STOREY - sillH) * 0.5, pd * 0.4, yaw, 'glass',
               { building, collide: true });
           } else {
             this._piece(P[0], y0 + STOREY * 0.5, P[1], pw, STOREY * 0.5, pd, yaw, wallKey, { building });
@@ -362,7 +388,7 @@ class District {
       }
 
       /* a couple of interior partitions and some furniture */
-      if (f === 0 || rng.next() < 0.6) this._furnish(building, f, base + f * STOREY, w, d, cx, cz, yaw, rng, local, P);
+      if (f <= 1 && (f === 0 || rng.next() < 0.5)) this._furnish(building, f, base + f * STOREY, w, d, cx, cz, yaw, rng, local, P);
     }
 
     /* pitched roof for small buildings */
@@ -389,7 +415,7 @@ class District {
   }
 
   _furnish(building, floor, y, w, d, cx, cz, yaw, rng, local, P) {
-    const n = 2 + rng.int(0, 4);
+    const n = 2 + rng.int(0, 3);
     for (let i = 0; i < n; i++) {
       const lx = rng.float(-w * 0.34, w * 0.34);
       const lz = rng.float(-d * 0.34, d * 0.34);
