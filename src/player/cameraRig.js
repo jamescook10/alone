@@ -9,11 +9,16 @@
 //
 // Swimming, diving, flying and driving force first person - the body has no
 // poses for them, and those modes always read best from inside the head.
+//
+// The mouse wheel sets the boom length. Scrolling all the way in dollies into
+// the head; scrolling out from inside eases back onto the boom.
 
 import * as THREE from 'three';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 
 const DIST = 3.9; // boom length at rest
+const ZOOM_MIN = 1.6; // scrolling in past this dollies into the head
+const ZOOM_MAX = 8.5;
 const BOOM_UP = 0.34; // "slightly above": the boom pivots from over the head
 const IDLE_DELAY = 10; // seconds of no movement input before easing in
 const IN_TIME = 2.0; // the locked, deliberate transition
@@ -52,6 +57,7 @@ export class CameraRig {
     this.idle = 0;
 
     this.follow = new THREE.Vector3(); // lagged head anchor
+    this.dist = DIST; // where the player wants the boom (mouse wheel)
     this.boomLen = DIST; // collision-clamped, smoothed
     this._followInit = false;
     this._trees = [];
@@ -81,6 +87,19 @@ export class CameraRig {
     const p = this.player;
     const cam = this.camera;
     const forced = !!(p.swimming || p.drifting || p.vehicle || p.underwater);
+
+    // The wheel is the zoom. Scrolling in past the shortest boom dollies into
+    // the head; scrolling out from first person eases back onto the boom.
+    const inp = this.world.input;
+    if (inp && inp.wheel && !this.world.paused) {
+      if (this.mode === 'third' || this.mode === 'out') {
+        const atMin = this.dist <= ZOOM_MIN + 0.01;
+        this.dist = clamp(this.dist * Math.pow(1.13, inp.wheel), ZOOM_MIN, ZOOM_MAX);
+        if (atMin && inp.wheel < 0 && this.mode === 'third') this._startIn(true);
+      } else if (this.mode === 'first' && inp.wheel > 0 && !forced && !p.sitting) {
+        this._startOut();
+      }
+    }
 
     // Movement input is what resets the idle clock and breaks first person.
     // Raw intent, read before the lock zeroes it - but the lock means the
@@ -136,12 +155,12 @@ export class CameraRig {
     V_ORIGIN.copy(this.follow);
 
     if (this.blend < 0.999) {
-      const maxLen = this._clampBoom(V_ORIGIN, V_DIR, DIST);
+      const maxLen = this._clampBoom(V_ORIGIN, V_DIR, this.dist);
       // Snap shorter instantly (never clip), relax back out gently.
       this.boomLen = maxLen < this.boomLen ? maxLen : lerp(this.boomLen, maxLen, 1 - Math.exp(-dt * 3));
       V_THIRD.copy(V_ORIGIN).addScaledVector(V_DIR, -this.boomLen);
     } else {
-      this.boomLen = DIST;
+      this.boomLen = this.dist;
     }
 
     /* --- place the camera -------------------------------------------- */
@@ -226,7 +245,7 @@ export class CameraRig {
       // Trunks do not move; refreshing the set a few times a second is plenty,
       // and flora.within walks every plant in every visible chunk.
       this._trees.length = 0;
-      w.flora.within(origin.x, origin.z, DIST + 1.5, this._trees);
+      w.flora.within(origin.x, origin.z, this.dist + 1.5, this._trees);
       this._treeTimer = 0.4;
     }
 

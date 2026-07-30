@@ -112,11 +112,13 @@ export class Interaction {
     }
 
     if (inp) {
-      // Hotbar.
+      // Choosing what you hold. The wheel belongs to the camera zoom now -
+      // touchpads scroll far too easily for it to flick through your hands.
       for (let i = 0; i < 9; i++) {
         if (inp.hit('Digit' + (i + 1))) this.inv.select(i);
       }
-      if (inp.wheel) this.inv.cycle(inp.wheel > 0 ? 1 : -1);
+      if (inp.hit('Comma')) this.inv.cycle(-1);
+      if (inp.hit('Period')) this.inv.cycle(1);
     }
 
     this._findTarget();
