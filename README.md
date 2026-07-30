@@ -1,10 +1,14 @@
 # ALONE
 
+### ▶ **[Play it here](https://jamescook10.github.io/alone/)**
+
 An endless, procedurally generated open world that runs in a browser tab. There
 are no goals, no score, no enemies and nobody else. You wake up somewhere
 pleasant and the rest is up to you.
 
 Best played with headphones — the sound is fully three-dimensional.
+
+Or run it yourself:
 
 ```bash
 npm install
