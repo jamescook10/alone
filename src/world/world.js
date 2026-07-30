@@ -15,6 +15,8 @@ import { Player } from '../player/player.js';
 import { Interaction } from '../player/interact.js';
 import { atmo } from '../gfx/atmosphere.js';
 
+const SHADOW_ANCHOR = new THREE.Vector3();
+
 export class World {
   constructor(engine, seed, opts = {}) {
     this.engine = engine;
@@ -79,7 +81,12 @@ export class World {
     this.terrain.update(p.position);
     this.weather.update(dt, p);
     this.sky.update(dt, this.engine.camera, this.weather);
-    this.sky.positionLights(p.position);
+    // Shadows track the ground under the player, not the player: flying at
+    // cloud height with the shadow box centred on you leaves the world below
+    // outside the light camera and drew a dark rectangle on the landscape.
+    const gy = this.terrain.heightAt(p.position.x, p.position.z);
+    SHADOW_ANCHOR.set(p.position.x, Math.min(p.position.y, gy + 40), p.position.z);
+    this.sky.positionLights(SHADOW_ANCHOR);
     this.flora.update(dt);
     this.fire.update(dt);
     this.physics.update(dt);

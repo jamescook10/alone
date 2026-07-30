@@ -385,8 +385,20 @@ export class Sky {
     this.uniforms.uMoonDir.value.copy(this.moonDir);
 
     if (weather) {
-      this.uniforms.uCloudCover.value = weather.cloudCover;
+      // When the volumetric pass owns the clouds, the sky dome's flat slab
+      // stands down (the cirrus sheet stays - it lives far above the layer).
+      const vc = this.engine.volclouds;
+      const vol = vc && vc.enabled;
+      if (vc) {
+        vc.cover = weather.cloudCover;
+        vc.dark = weather.cloudDark;
+        vc.driftM.x += weather.windDir.x * dt * 9;
+        vc.driftM.y += weather.windDir.y * dt * 9;
+      }
+      this.uniforms.uCloudCover.value = vol ? 0 : weather.cloudCover;
       this.uniforms.uCloudDark.value = weather.cloudDark;
+      this._adaptCover = weather.cloudCover;
+      this._adaptVol = !!vol;
       this.uniforms.uOvercast.value = weather.overcast;
       this.uniforms.uHaze.value = 0.10 + weather.humidity * 0.30 + weather.fog * 0.45;
       this.uniforms.uWind.value.set(weather.windDir.x, weather.windDir.y);
@@ -562,10 +574,13 @@ export class Sky {
   _adapt(dt) {
     const lum = (c) => c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
     let mid = lum(this.horizonColor) * 0.42 + lum(this.zenithColor) * 0.58;
-    // The colour model doesn't know the cloud slab exists, but the eye does:
-    // a clouded day sky is BRIGHT, and metering as if it were clear blew the
-    // clouds out to one structureless white sheet.
-    mid *= 1 + this.uniforms.uCloudCover.value * 1.2 * this.dayFactor;
+    // The colour model doesn't know clouds exist, but the eye does. The flat
+    // slab renders BRIGHTER than the clear model (meter up or it blows out);
+    // the volumetric deck renders DARKER than it (meter down or midday under
+    // cloud looks like dusk).
+    const cov = this._adaptCover !== undefined ? this._adaptCover : this.uniforms.uCloudCover.value;
+    if (this._adaptVol) mid *= 1 - cov * 0.38 * this.dayFactor;
+    else mid *= 1 + cov * 1.2 * this.dayFactor;
     // Aim brighter by day than by night: a clear daytime sky in a photograph
     // sits well above middle grey. Metering it to 0.44 made mornings dusk.
     const aim = lerp(0.46, 0.64, this.dayFactor);

@@ -78,6 +78,7 @@ export class UI {
         <div class="row"><span class="toggle" data-t="shadows">shadows</span><b class="v-shadows"></b></div>
         <div class="row"><span class="toggle" data-t="bloom">bloom</span><b class="v-bloom"></b></div>
         <div class="row"><span class="toggle" data-t="shafts">light shafts</span><b class="v-shafts"></b></div>
+        <div class="row"><span class="toggle" data-t="vclouds">volumetric clouds</span><b class="v-vclouds"></b></div>
         <div class="row"><span class="toggle" data-t="grain">film grain</span><b class="v-grain"></b></div>
         <div class="row"><span class="toggle" data-t="sound">sound</span><b class="v-sound"></b></div>
         <div class="row"><span class="toggle" data-t="res">resolution</span><b class="v-res"></b></div>
@@ -154,6 +155,7 @@ export class UI {
       case 'shadows': e.setQuality({ shadows: !q.shadows }); break;
       case 'bloom': e.setQuality({ bloom: !q.bloom }); break;
       case 'shafts': e.setQuality({ godrays: !q.godrays }); break;
+      case 'vclouds': e.setQuality({ volClouds: !q.volClouds }); break;
       case 'grain': {
         const g = e.grade.uniforms.uGrain;
         g.value = g.value > 0.001 ? 0 : 0.020;
@@ -195,6 +197,7 @@ export class UI {
     set('shadows', e.quality.shadows ? 'on' : 'off');
     set('bloom', e.quality.bloom ? 'on' : 'off');
     set('shafts', e.quality.godrays ? 'on' : 'off');
+    set('vclouds', e.quality.volClouds ? 'on' : 'off');
     set('grain', e.grade.uniforms.uGrain.value > 0.001 ? 'on' : 'off');
     set('sound', this.world.audio && this.world.audio.enabled ? 'on' : 'off');
     set('res', e.quality.pixelRatio.toFixed(2) + '×');
