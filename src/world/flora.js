@@ -5,25 +5,19 @@
 // dozen draw calls. Growth happens in the vertex shader: each instance carries
 // the world-day it sprouted, so trees get visibly taller while you watch, and
 // a seed you push into the soil becomes a sapling and then a tree.
+//
+// The flat-shaded restyle retired the baked textured trees: the in-code
+// builders below already make exactly the chunky faceted canopies the look
+// wants, at a fraction of the triangles and with zero texture fetches.
 
 import * as THREE from 'three';
-import { makeFoliageMaterial, makeSolidMaterial, grassTexture } from '../gfx/materials.js';
+import { makeFoliageMaterial, makeSolidMaterial } from '../gfx/materials.js';
 import { Rng, hash3f, clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 import { BIOME_INFO } from './worldgen.js';
-import { assets } from '../gfx/assets.js';
 
 export const SPECIES = {
   OAK: 0, PINE: 1, BIRCH: 2, PALM: 3, ACACIA: 4, CACTUS: 5, WILLOW: 6, SNAG: 7,
   JUNGLE: 8, SPRUCE: 9, BUSH: 10, FERN: 11, SAPLING: 12,
-};
-
-// Species with baked ez-tree geometry (see scripts/bake-trees.mjs). Palm,
-// cactus and fern keep their hand-built forms.
-const BAKED_NAME = {
-  [SPECIES.OAK]: 'oak', [SPECIES.PINE]: 'pine', [SPECIES.BIRCH]: 'birch',
-  [SPECIES.ACACIA]: 'acacia', [SPECIES.WILLOW]: 'willow', [SPECIES.SNAG]: 'snag',
-  [SPECIES.JUNGLE]: 'jungle', [SPECIES.SPRUCE]: 'spruce', [SPECIES.BUSH]: 'bush',
-  [SPECIES.SAPLING]: 'sapling',
 };
 
 export const SPECIES_INFO = [
@@ -167,30 +161,34 @@ class MeshBuilder {
 
 /* ------------------------------------------------------------ tree recipes */
 
-// Bark reflectances sit a third higher than the first pass: at the old
-// values, trunks metered as pure black cutouts against any daytime sky.
+// Palette authored in sRGB pastels and converted to linear once - soft warm
+// barks and spring greens to sit against the sandy ochres of the ground.
+const P = (r, g, b) => {
+  const c = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+  return [c.r, c.g, c.b];
+};
 const BARK = {
-  oak: [0.152, 0.112, 0.076],
-  pine: [0.126, 0.087, 0.061],
-  birch: [0.702, 0.682, 0.634],
-  palm: [0.224, 0.177, 0.116],
-  acacia: [0.190, 0.152, 0.104],
-  cactus: [0.084, 0.155, 0.074],
-  dead: [0.204, 0.180, 0.154],
-  jungle: [0.176, 0.150, 0.118],
+  oak: P(0.45, 0.35, 0.27),
+  pine: P(0.40, 0.31, 0.24),
+  birch: P(0.90, 0.88, 0.83),
+  palm: P(0.56, 0.45, 0.32),
+  acacia: P(0.50, 0.39, 0.29),
+  cactus: P(0.40, 0.62, 0.36),
+  dead: P(0.63, 0.56, 0.49),
+  jungle: P(0.47, 0.39, 0.31),
 };
 const LEAF = {
-  oak: [0.108, 0.201, 0.056],
-  pine: [0.067, 0.137, 0.070],
-  birch: [0.166, 0.263, 0.079],
-  palm: [0.123, 0.236, 0.079],
-  acacia: [0.184, 0.219, 0.084],
-  cactus: [0.123, 0.228, 0.102],
-  willow: [0.154, 0.228, 0.091],
-  jungle: [0.079, 0.175, 0.056],
-  spruce: [0.052, 0.108, 0.063],
-  bush: [0.102, 0.184, 0.061],
-  fern: [0.096, 0.201, 0.074],
+  oak: P(0.50, 0.70, 0.40),
+  pine: P(0.33, 0.52, 0.38),
+  birch: P(0.64, 0.78, 0.42),
+  palm: P(0.44, 0.69, 0.40),
+  acacia: P(0.60, 0.70, 0.37),
+  cactus: P(0.44, 0.68, 0.40),
+  willow: P(0.54, 0.71, 0.44),
+  jungle: P(0.32, 0.58, 0.32),
+  spruce: P(0.27, 0.45, 0.34),
+  bush: P(0.46, 0.67, 0.38),
+  fern: P(0.44, 0.69, 0.36),
 };
 
 /** Recursive branching used by the broadleaf species. */
@@ -505,68 +503,34 @@ export class Flora {
       uniforms: this.growUniform,
     });
     this.leafMat = makeFoliageMaterial({
-      key: 'leaf', stiffness: 0.11, sway: 1.0, doubleSide: true, translucency: 0.85,
-      colorVar: 0.55,
+      key: 'leaf', stiffness: 0.11, sway: 1.0, doubleSide: true, translucency: 0.55,
       uniforms: this.growUniform,
     });
     this._patchGrowth(this.barkMat);
     this._patchGrowth(this.leafMat);
 
-    this.rockMat = makeSolidMaterial({ key: 'rock', flat: true, roughness: 0.94 });
-    this.fruitMat = makeSolidMaterial({ key: 'fruit', roughness: 0.55 });
+    this.rockMat = makeSolidMaterial({ key: 'rock' });
+    this.fruitMat = makeSolidMaterial({ key: 'fruit' });
 
     this.barkPools = [];
     this.leafPools = [];
     this.farBarkPools = [];
     this.farLeafPools = [];
-    this._barkMats = {};
-    this._leafMats = {};
     for (let sp = 0; sp < SPECIES_INFO.length; sp++) {
       const cap = SPECIES_INFO[sp].cap;
-      const H = SPECIES_INFO[sp].height;
-      const baked = assets.trees && assets.trees[BAKED_NAME[sp]];
-      if (baked && baked.bark) {
-        // Baked geometry is normalised to unit height; scale it (once) to
-        // this species' height so the rest of the game - interaction ranges,
-        // fruit placement, growth - keeps its existing size logic.
-        if (!baked.scaled) {
-          for (const k of ['bark', 'leaf', 'farBark', 'farLeaf']) {
-            if (baked[k]) {
-              baked[k].scale(H, H, H);
-              baked[k].computeBoundingSphere();
-            }
-          }
-          baked.scaled = true;
-        }
-        const bMat = this._barkMaterial(baked.tex.bark);
-        const lMat = baked.tex.leaf ? this._leafMaterial(baked.tex.leaf) : null;
-        this.barkPools[sp] = new Pool(baked.bark, bMat, cap, this.scene);
-        this.leafPools[sp] = baked.leaf && lMat ? new Pool(baked.leaf, lMat, cap, this.scene) : null;
-        const fb = new Pool(baked.farBark, bMat, cap * 2, this.scene);
-        fb.mesh.castShadow = false;
-        this.farBarkPools[sp] = fb;
-        if (baked.farLeaf && lMat) {
-          const fl = new Pool(baked.farLeaf, lMat, cap * 2, this.scene);
-          fl.mesh.castShadow = false;
-          this.farLeafPools[sp] = fl;
-        } else {
-          this.farLeafPools[sp] = null;
-        }
-      } else {
-        const g = buildSpecies(sp, world.seed);
-        this.barkPools[sp] = g.bark ? new Pool(g.bark, this.barkMat, cap, this.scene) : null;
-        this.leafPools[sp] = g.leaf ? new Pool(g.leaf, this.leafMat, cap, this.scene) : null;
-        const farPool = new Pool(buildFarSpecies(sp, world.seed), this.leafMat, cap * 2, this.scene);
-        farPool.mesh.castShadow = false;
-        this.farBarkPools[sp] = farPool;
-        this.farLeafPools[sp] = null;
-      }
+      const g = buildSpecies(sp, world.seed);
+      this.barkPools[sp] = g.bark ? new Pool(g.bark, this.barkMat, cap, this.scene) : null;
+      this.leafPools[sp] = g.leaf ? new Pool(g.leaf, this.leafMat, cap, this.scene) : null;
+      const farPool = new Pool(buildFarSpecies(sp, world.seed), this.leafMat, cap * 2, this.scene);
+      farPool.mesh.castShadow = false;
+      this.farBarkPools[sp] = farPool;
+      this.farLeafPools[sp] = null;
     }
 
     // Rocks: one blobby geometry, scaled and rotated per instance.
     const rb = new MeshBuilder();
     const rrng = new Rng(world.seed ^ 0x9a3).next;
-    rb.blob(0, 0.25, 0, 0.6, 0.42, 0.55, 2, 5, [0.145, 0.138, 0.128], 0.40, rrng);
+    rb.blob(0, 0.25, 0, 0.6, 0.42, 0.55, 2, 5, P(0.60, 0.58, 0.65), 0.40, rrng);
     this.rockPool = new Pool(rb.toGeometry(), this.rockMat, 9000, this.scene, false);
     this.rockPool.mesh.castShadow = true;
 
@@ -585,36 +549,6 @@ export class Flora {
     this.chunks = new Map(); // node -> entry
     this.plantIndex = new Map(); // cell key -> [plant records] for lookup
     this.worldDay = 0;
-  }
-
-  /** One material per bark texture set, shared by every species that uses it. */
-  _barkMaterial(name) {
-    if (!this._barkMats[name]) {
-      const mat = makeFoliageMaterial({
-        key: 'bark_' + name, stiffness: 0.05, sway: 0.35,
-        map: assets.texture(`trees/tex/${name}_color.jpg`),
-        normalMap: assets.texture(`trees/tex/${name}_normal.jpg`, { srgb: false }),
-        roughnessMap: assets.texture(`trees/tex/${name}_roughness.jpg`, { srgb: false }),
-        uniforms: this.growUniform,
-      });
-      this._patchGrowth(mat);
-      this._barkMats[name] = mat;
-    }
-    return this._barkMats[name];
-  }
-
-  _leafMaterial(name) {
-    if (!this._leafMats[name]) {
-      const mat = makeFoliageMaterial({
-        key: 'leafx_' + name, stiffness: 0.11, sway: 1.0, doubleSide: true,
-        translucency: 0.85, colorVar: 0.45, alphaTest: 0.5,
-        map: assets.texture(`trees/tex/${name}_color.png`),
-        uniforms: this.growUniform,
-      });
-      this._patchGrowth(mat);
-      this._leafMats[name] = mat;
-    }
-    return this._leafMats[name];
   }
 
   _patchGrowth(mat) {
@@ -642,36 +576,47 @@ export class Flora {
   }
 
   _buildGrass() {
-    const tex = grassTexture();
+    // Solid-colour geometry blades - no texture, no alpha test, so early-Z
+    // works and a meadow stops being an overdraw problem. Five single
+    // triangles in a loose fan read as a tuft from a metre away.
     const mat = makeFoliageMaterial({
-      key: 'grass', stiffness: 0.55, sway: 2.6, doubleSide: true, translucency: 1.30,
-      alphaTest: 0.42, map: tex, uniforms: this.growUniform,
+      key: 'grass', stiffness: 0.55, sway: 2.6, doubleSide: true, translucency: 0.9,
+      uniforms: this.growUniform,
     });
-    mat.map.wrapS = mat.map.wrapT = THREE.ClampToEdgeWrapping;
+    // Without the growth patch the per-instance tint never reaches the
+    // shader, and every tuft renders in the raw cream base colour.
+    this._patchGrowth(mat);
     this.grassMat = mat;
     const g = new THREE.BufferGeometry();
-    // three crossed quads
     const pos = [];
     const nrm = [];
-    const uv = [];
+    const col = [];
     const idx = [];
-    const H = 0.42;
-    const W = 0.27;
-    for (let k = 0; k < 3; k++) {
-      const a = (k / 3) * Math.PI;
-      const dx = Math.cos(a) * W, dz = Math.sin(a) * W;
+    const BLADES = 5;
+    for (let k = 0; k < BLADES; k++) {
+      const a = (k / BLADES) * Math.PI * 2 + k * 0.7;
+      const r = 0.05 + (k % 3) * 0.045;
+      const bx = Math.cos(a) * r, bz = Math.sin(a) * r;
+      const lean = 0.10 + (k % 2) * 0.08;
+      const h = 0.34 + ((k * 37) % 10) * 0.02;
+      const w = 0.035;
+      const px = -Math.sin(a) * w, pz = Math.cos(a) * w;
       const b = pos.length / 3;
-      pos.push(-dx, 0, -dz, dx, 0, dz, dx, H, dz, -dx, H, -dz);
+      pos.push(
+        bx - px, 0, bz - pz,
+        bx + px, 0, bz + pz,
+        bx + Math.cos(a) * lean, h, bz + Math.sin(a) * lean
+      );
       // Normals lean well upward: blades shade like the meadow they stand
       // in, instead of metering as dark side-lit fins against bright ground.
-      for (let i = 0; i < 4; i++) nrm.push(-Math.sin(a) * 0.55, 0.78, Math.cos(a) * 0.55);
-      uv.push(0, 0, 1, 0, 1, 1, 0, 1);
-      idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+      for (let i = 0; i < 3; i++) nrm.push(-Math.sin(a) * 0.5, 0.8, Math.cos(a) * 0.5);
+      // Dark base to light tip, so tufts read as dense without a texture.
+      col.push(0.55, 0.60, 0.45, 0.55, 0.60, 0.45, 1.15, 1.2, 0.95);
+      idx.push(b, b + 1, b + 2);
     }
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(new Array(pos.length).fill(1), 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     g.setIndex(idx);
     g.computeBoundingSphere();
     this.grassPool = new Pool(g, mat, 84000, this.scene);
@@ -747,8 +692,10 @@ export class Flora {
       M4.compose(VEC.set(G[i], G[i + 1], G[i + 2]), QUAT, SCL.set(s, s * (0.8 + s * 0.5), s));
       this.grassPool.setMatrix(slot, M4);
       const type = G[i + 5] | 0;
+      // The tint multiplies the blade's base-to-tip vertex gradient; these
+      // values land the tips around a pastel spring green after tonemapping.
       const t = type === 0
-        ? [0.30 + hash3f(i, node.x | 0, 3) * 0.20, 0.40, 0.20]
+        ? [0.26 + hash3f(i, node.x | 0, 3) * 0.14, 0.50, 0.20]
         : FLOWER_TINTS[(type - 1) % FLOWER_TINTS.length];
       this.grassPool.setGrowth(slot, -999, 99, t[0], t[1], t[2]);
       entry.grass.push(slot);

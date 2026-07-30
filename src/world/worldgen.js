@@ -34,28 +34,33 @@ export const BIOME = {
 
 export const BIOME_COUNT = 16;
 
-// Ground colours are physical reflectances in linear space, not display
-// colours - grass really does only bounce back about a seventh of the light
-// that hits it. Keeping them honest is what stops the world looking like
-// washed-out plastic once the sun and sky are also physically scaled.
+// Ground colours, authored in sRGB as the pastel the player should actually
+// see and converted to linear once below. Warm sandy ochres, spring greens,
+// lilac-grey rock, off-white snow - the flat-illustration palette.
 export const BIOME_INFO = [
-  { name: 'Abyss',      col: [0.065, 0.072, 0.084], col2: [0.043, 0.049, 0.061], trees: 0.0,  grass: 0.0,  rocks: 0.5, flowers: 0 },
-  { name: 'Seabed',     col: [0.196, 0.186, 0.142], col2: [0.145, 0.145, 0.123], trees: 0.0,  grass: 0.1,  rocks: 0.6, flowers: 0 },
-  { name: 'Reef',       col: [0.290, 0.261, 0.181], col2: [0.152, 0.239, 0.203], trees: 0.0,  grass: 0.5,  rocks: 1.2, flowers: 0.4 },
-  { name: 'Shore',      col: [0.478, 0.420, 0.290], col2: [0.392, 0.345, 0.241], trees: 0.02, grass: 0.05, rocks: 0.35, flowers: 0.02 },
-  { name: 'Grassland',  col: [0.152, 0.225, 0.070], col2: [0.210, 0.261, 0.090], trees: 0.10, grass: 1.0,  rocks: 0.16, flowers: 0.7 },
-  { name: 'Forest',     col: [0.084, 0.142, 0.051], col2: [0.119, 0.177, 0.067], trees: 0.85, grass: 0.7,  rocks: 0.22, flowers: 0.35 },
-  { name: 'Rainforest', col: [0.058, 0.125, 0.043], col2: [0.084, 0.160, 0.058], trees: 1.35, grass: 0.9,  rocks: 0.14, flowers: 0.5 },
-  { name: 'Taiga',      col: [0.102, 0.142, 0.080], col2: [0.133, 0.162, 0.102], trees: 0.75, grass: 0.4,  rocks: 0.35, flowers: 0.15 },
-  { name: 'Tundra',     col: [0.217, 0.215, 0.157], col2: [0.275, 0.261, 0.203], trees: 0.05, grass: 0.35, rocks: 0.5, flowers: 0.12 },
-  { name: 'Snowfield',  col: [0.760, 0.790, 0.850], col2: [0.660, 0.710, 0.800], trees: 0.03, grass: 0.02, rocks: 0.4, flowers: 0 },
-  { name: 'Desert',     col: [0.493, 0.389, 0.225], col2: [0.413, 0.322, 0.186], trees: 0.02, grass: 0.06, rocks: 0.3, flowers: 0.03 },
-  { name: 'Savanna',    col: [0.283, 0.258, 0.102], col2: [0.348, 0.307, 0.128], trees: 0.12, grass: 0.8,  rocks: 0.2, flowers: 0.2 },
-  { name: 'Wetland',    col: [0.104, 0.142, 0.067], col2: [0.145, 0.167, 0.081], trees: 0.35, grass: 1.2,  rocks: 0.08, flowers: 0.45 },
-  { name: 'Alpine',     col: [0.239, 0.236, 0.229], col2: [0.312, 0.307, 0.297], trees: 0.10, grass: 0.25, rocks: 0.9, flowers: 0.3 },
-  { name: 'Scree',      col: [0.196, 0.183, 0.171], col2: [0.145, 0.136, 0.129], trees: 0.0,  grass: 0.03, rocks: 1.4, flowers: 0.02 },
-  { name: 'Meadow',     col: [0.181, 0.261, 0.080], col2: [0.246, 0.312, 0.104], trees: 0.18, grass: 1.4,  rocks: 0.1, flowers: 1.6 },
+  { name: 'Abyss',      col: [0.20, 0.27, 0.36], col2: [0.16, 0.22, 0.31], trees: 0.0,  grass: 0.0,  rocks: 0.5, flowers: 0 },
+  { name: 'Seabed',     col: [0.72, 0.66, 0.48], col2: [0.62, 0.57, 0.42], trees: 0.0,  grass: 0.1,  rocks: 0.6, flowers: 0 },
+  { name: 'Reef',       col: [0.83, 0.76, 0.54], col2: [0.52, 0.72, 0.62], trees: 0.0,  grass: 0.5,  rocks: 1.2, flowers: 0.4 },
+  { name: 'Shore',      col: [0.89, 0.80, 0.58], col2: [0.83, 0.73, 0.51], trees: 0.02, grass: 0.05, rocks: 0.35, flowers: 0.02 },
+  { name: 'Grassland',  col: [0.56, 0.73, 0.36], col2: [0.66, 0.79, 0.42], trees: 0.10, grass: 1.0,  rocks: 0.16, flowers: 0.7 },
+  { name: 'Forest',     col: [0.42, 0.63, 0.32], col2: [0.50, 0.70, 0.37], trees: 0.85, grass: 0.7,  rocks: 0.22, flowers: 0.35 },
+  { name: 'Rainforest', col: [0.31, 0.58, 0.30], col2: [0.38, 0.66, 0.34], trees: 1.35, grass: 0.9,  rocks: 0.14, flowers: 0.5 },
+  { name: 'Taiga',      col: [0.48, 0.63, 0.41], col2: [0.55, 0.67, 0.46], trees: 0.75, grass: 0.4,  rocks: 0.35, flowers: 0.15 },
+  { name: 'Tundra',     col: [0.70, 0.67, 0.51], col2: [0.77, 0.72, 0.57], trees: 0.05, grass: 0.35, rocks: 0.5, flowers: 0.12 },
+  { name: 'Snowfield',  col: [0.93, 0.94, 0.97], col2: [0.86, 0.89, 0.94], trees: 0.03, grass: 0.02, rocks: 0.4, flowers: 0 },
+  { name: 'Desert',     col: [0.91, 0.76, 0.49], col2: [0.85, 0.68, 0.42], trees: 0.02, grass: 0.06, rocks: 0.3, flowers: 0.03 },
+  { name: 'Savanna',    col: [0.80, 0.71, 0.38], col2: [0.86, 0.77, 0.44], trees: 0.12, grass: 0.8,  rocks: 0.2, flowers: 0.2 },
+  { name: 'Wetland',    col: [0.44, 0.62, 0.35], col2: [0.50, 0.65, 0.39], trees: 0.35, grass: 1.2,  rocks: 0.08, flowers: 0.45 },
+  { name: 'Alpine',     col: [0.66, 0.64, 0.70], col2: [0.73, 0.71, 0.76], trees: 0.10, grass: 0.25, rocks: 0.9, flowers: 0.3 },
+  { name: 'Scree',      col: [0.60, 0.58, 0.65], col2: [0.53, 0.51, 0.58], trees: 0.0,  grass: 0.03, rocks: 1.4, flowers: 0.02 },
+  { name: 'Meadow',     col: [0.59, 0.76, 0.37], col2: [0.68, 0.82, 0.44], trees: 0.18, grass: 1.4,  rocks: 0.1, flowers: 1.6 },
 ];
+// sRGB -> linear, once, in place (this module runs in workers, so no three).
+for (const info of BIOME_INFO) {
+  for (const key of ['col', 'col2']) {
+    info[key] = info[key].map((c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+  }
+}
 
 export const SETTLEMENT = { NONE: 0, HAMLET: 1, VILLAGE: 2, TOWN: 3, CITY: 4 };
 export const SETTLEMENT_INFO = [

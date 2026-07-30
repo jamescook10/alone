@@ -209,30 +209,41 @@ function build(req) {
 const TMPC = [0, 0, 0];
 const MATW = [0, 0]; // sand, snow weights for the texture splat
 
+// sRGB -> linear, because the palette below is authored as display colours
+// and the vertex colour attribute feeds the shader in linear space.
+function s2l(c) {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+// Flat-look overlays, authored in sRGB pastels and converted once.
+const ROCK_COL = [s2l(0.60), s2l(0.58), s2l(0.65)]; // soft lilac-grey
+const SNOW_COL = [s2l(0.93), s2l(0.95), s2l(0.97)];
+const SAND_COL = [s2l(0.89), s2l(0.79), s2l(0.57)];
+const GRAVEL_COL = [s2l(0.64), s2l(0.60), s2l(0.58)];
+const PAVE_COL = [s2l(0.60), s2l(0.57), s2l(0.55)];
+const ROAD_COL = [s2l(0.38), s2l(0.38), s2l(0.41)];
+
 function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road, town, out, matw) {
   if (matw) {
-    // Sand covers deserts and beaches outright; shorelines add it below.
     matw[0] = (biome === BIOME.DESERT || biome === BIOME.BEACH) ? 1 - smoothstep(0.30, 0.60, slope) : 0;
     matw[1] = 0;
   }
   const info = BIOME_INFO[biome];
-  // Two-tone base with a large-scale patchiness so ground is never flat.
-  const v = hashNoise(x * 0.021, z * 0.021) * 0.5 + hashNoise(x * 0.0043, z * 0.0043) * 0.5;
+  // Two-tone base quantised to three flat steps: large clean patches of
+  // colour instead of continuous mottle - the flat-illustration look.
+  const vRaw = hashNoise(x * 0.021, z * 0.021) * 0.5 + hashNoise(x * 0.0043, z * 0.0043) * 0.5;
+  const v = Math.min(2, Math.floor(vRaw * 3)) * 0.5;
   let r = lerp(info.col[0], info.col2[0], v);
   let g = lerp(info.col[1], info.col2[1], v);
   let b = lerp(info.col[2], info.col2[2], v);
 
-  // Fine mottling.
-  const m = 0.90 + hashNoise(x * 0.55, z * 0.55) * 0.20;
-  r *= m; g *= m; b *= m;
-
-  // Steep ground shows rock.
-  const rock = smoothstep(0.42, 0.80, slope);
+  // Steep ground shows rock, over a narrow band so the edge stays clean.
+  const rock = smoothstep(0.46, 0.60, slope);
   if (rock > 0) {
-    const rv = 0.115 + hashNoise(x * 0.09, z * 0.09) * 0.075;
-    r = lerp(r, rv * 1.06, rock);
-    g = lerp(g, rv * 1.0, rock);
-    b = lerp(b, rv * 0.94, rock);
+    const rv = 0.90 + hashNoise(x * 0.09, z * 0.09) * 0.2;
+    r = lerp(r, ROCK_COL[0] * rv, rock);
+    g = lerp(g, ROCK_COL[1] * rv, rock);
+    b = lerp(b, ROCK_COL[2] * rv, rock);
   }
 
   // Snow settles on cold, flat, high ground.
@@ -240,20 +251,20 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
   const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope));
   if (matw) matw[1] = snow;
   if (snow > 0.01) {
-    r = lerp(r, 0.70, snow);
-    g = lerp(g, 0.74, snow);
-    b = lerp(b, 0.82, snow);
+    r = lerp(r, SNOW_COL[0], snow);
+    g = lerp(g, SNOW_COL[1], snow);
+    b = lerp(b, SNOW_COL[2], snow);
   }
 
   // Sand at the water's edge, silt under it.
   if (waterLevel > -9999) {
     const d = waterLevel - h;
     if (d > -1.6) {
-      const shore = saturate(1 - Math.abs(d) / 2.2);
+      const shore = smoothstep(0.25, 0.75, saturate(1 - Math.abs(d) / 2.2));
       if (matw) matw[0] = Math.max(matw[0], shore);
-      r = lerp(r, 0.300, shore * 0.6);
-      g = lerp(g, 0.262, shore * 0.6);
-      b = lerp(b, 0.185, shore * 0.6);
+      r = lerp(r, SAND_COL[0], shore * 0.8);
+      g = lerp(g, SAND_COL[1], shore * 0.8);
+      b = lerp(b, SAND_COL[2], shore * 0.8);
       // Everything underwater darkens with depth.
       const sub = saturate(d / 14);
       r = lerp(r, r * 0.40, sub);
@@ -265,20 +276,18 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
   // River beds are gravel.
   if (river > 0.15) {
     const k = smoothstep(0.15, 0.6, river) * 0.55;
-    const gv = 0.145 + hashNoise(x * 0.3, z * 0.3) * 0.085;
-    r = lerp(r, gv, k); g = lerp(g, gv * 0.97, k); b = lerp(b, gv * 0.88, k);
+    const gv = 0.9 + hashNoise(x * 0.3, z * 0.3) * 0.2;
+    r = lerp(r, GRAVEL_COL[0] * gv, k); g = lerp(g, GRAVEL_COL[1] * gv, k); b = lerp(b, GRAVEL_COL[2] * gv, k);
   }
 
   // Roads and town ground: paving, then asphalt.
   if (town > 0.02) {
     const k = smoothstep(0.02, 0.55, town) * 0.6;
-    const pv = 0.098 + hashNoise(x * 0.14, z * 0.14) * 0.042;
-    r = lerp(r, pv * 1.04, k); g = lerp(g, pv, k); b = lerp(b, pv * 0.95, k);
+    r = lerp(r, PAVE_COL[0], k); g = lerp(g, PAVE_COL[1], k); b = lerp(b, PAVE_COL[2], k);
   }
   if (road > 0.02) {
     const k = smoothstep(0.05, 0.5, road);
-    const av = 0.048 + hashNoise(x * 0.5, z * 0.5) * 0.016;
-    r = lerp(r, av, k); g = lerp(g, av, k); b = lerp(b, av * 1.08, k);
+    r = lerp(r, ROAD_COL[0], k); g = lerp(g, ROAD_COL[1], k); b = lerp(b, ROAD_COL[2], k);
   }
 
   out[0] = clamp(r, 0, 1);

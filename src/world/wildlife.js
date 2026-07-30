@@ -138,9 +138,9 @@ export class Wildlife {
     this.rng = new Rng(world.seed ^ 0x1a2b);
     this.animTime = { value: 0 };
 
-    // Smooth shading now: the bodies are rounded spines, and flat shading
-    // would refacet every curve.
-    this.mat = makeSolidMaterial({ key: 'animal', flat: false, roughness: 0.82 });
+    // Flat shading refacets the rounded spines into the chunky paper-craft
+    // forms the restyle wants; the silhouettes and the GPU limb rig survive.
+    this.mat = makeSolidMaterial({ key: 'animal', flat: true });
     this._patch(this.mat);
 
     this.pools = SPECIES.map((sp) => {

@@ -264,7 +264,11 @@ export class Weather {
     atmo.uWindStrength.value = this.wind;
     atmo.uWetness.value = this.wetness;
     atmo.uSnowAmount.value = Math.max(this.snowCover, smoothstep(1.5, -3.0, localTemp) * 0.7);
-    atmo.uFogDensity.value = lerp(0.00014, 0.0032, this.fog * this.fog) + this.rain * 0.0007;
+    // When the auto-quality ladder pulls the far plane in, thicker fog hides
+    // the cut instead of showing sky through the missing horizon.
+    const farK = this.world.engine.quality.farK || 1;
+    const fogBoost = farK < 1 ? 3.2 : 1;
+    atmo.uFogDensity.value = (lerp(0.00014, 0.0032, this.fog * this.fog) + this.rain * 0.0007) * fogBoost;
     atmo.uFogFalloff.value = lerp(0.0016, 0.0068, this.fog);
 
     /* --- precipitation mesh --------------------------------------------- */
