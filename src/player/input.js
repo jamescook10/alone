@@ -15,7 +15,12 @@ export class Input {
     this.lockError = null;
     this.buttons = [false, false, false];
     this.clicked = [false, false, false];
-    this.sensitivity = 0.0022;
+    // Look speed is a multiplier on this base, remembered across visits -
+    // a touchpad wants two or three times what a mouse does.
+    this.baseSensitivity = 0.0022;
+    let look = 1;
+    try { look = parseFloat(localStorage.getItem('alone.lookSpeed')) || 1; } catch (e) { /* private mode */ }
+    this.sensitivity = this.baseSensitivity * Math.min(4, Math.max(0.25, look));
     this.invertY = false;
     this.enabled = true;
     this.move = { x: 0, y: 0 }; // analogue movement, -1..1
@@ -159,6 +164,15 @@ export class Input {
     } catch (e) {
       try { this.canvas.requestPointerLock(); } catch (e2) { /* ignore */ }
     }
+  }
+
+  get lookSpeed() {
+    return this.sensitivity / this.baseSensitivity;
+  }
+
+  setLookSpeed(mult) {
+    this.sensitivity = this.baseSensitivity * Math.min(4, Math.max(0.25, mult));
+    try { localStorage.setItem('alone.lookSpeed', String(mult)); } catch (e) { /* private mode */ }
   }
 
   /** True when the mouse (or a finger) is actually driving the game. */

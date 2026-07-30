@@ -83,6 +83,7 @@ export class UI {
         <div class="row"><span class="toggle" data-t="shafts">light shafts</span><b class="v-shafts"></b></div>
         <div class="row"><span class="toggle" data-t="vclouds">volumetric clouds</span><b class="v-vclouds"></b></div>
         <div class="row"><span class="toggle" data-t="grain">film grain</span><b class="v-grain"></b></div>
+        <div class="row"><span class="toggle" data-t="look">look speed</span><b class="v-look"></b></div>
         <div class="row"><span class="toggle" data-t="sound">sound</span><b class="v-sound"></b></div>
         <div class="row"><span class="toggle" data-t="res">resolution</span><b class="v-res"></b></div>
         <div class="row"><span class="toggle" data-t="fullscreen">fullscreen</span><b class="v-fullscreen"></b></div>
@@ -172,6 +173,14 @@ export class UI {
         g.value = g.value > 0.001 ? 0 : 0.020;
         break;
       }
+      case 'look': {
+        const inp = this.world.input;
+        if (!inp) break;
+        const steps = [0.5, 0.75, 1, 1.5, 2, 3];
+        const i = steps.findIndex((v) => v > inp.lookSpeed + 0.01);
+        inp.setLookSpeed(i < 0 ? steps[0] : steps[i]);
+        break;
+      }
       case 'sound':
         if (this.world.audio) {
           this.world.audio.enabled = !this.world.audio.enabled;
@@ -210,6 +219,7 @@ export class UI {
     set('shafts', e.quality.godrays ? 'on' : 'off');
     set('vclouds', e.quality.volClouds ? 'on' : 'off');
     set('grain', e.grade.uniforms.uGrain.value > 0.001 ? 'on' : 'off');
+    set('look', this.world.input ? this.world.input.lookSpeed.toFixed(2).replace(/\.?0+$/, '') + '×' : '—');
     set('sound', this.world.audio && this.world.audio.enabled ? 'on' : 'off');
     set('res', e.quality.pixelRatio.toFixed(2) + '×');
     set('fullscreen', document.fullscreenElement ? 'on' : 'off');
