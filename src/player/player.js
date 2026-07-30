@@ -9,11 +9,15 @@ import { clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 import { atmo } from '../gfx/atmosphere.js';
 import { BIOME } from '../world/worldgen.js';
 import { ambientAt } from '../sim/chemistry.js';
+import { createCharacter } from './character.js';
+import { CameraRig } from './cameraRig.js';
 
 const EYE = 1.66;
 const EYE_CROUCH = 1.02;
+const EYE_SIT = 0.98;
 const RADIUS = 0.34;
 const GRAVITY = -19.0;
+const FP_EYE = new THREE.Vector3();
 
 export class Player {
   constructor(world, spawn) {
@@ -41,6 +45,14 @@ export class Player {
     this.warmth = 1;
     this.energy = 1;
     this.temperature = 15;
+
+    this.sitting = false;
+    this.sit01 = 0;
+    this.sitYaw = null;
+    this.rawMove = false;
+    this._satBefore = false;
+    this.character = createCharacter(world.engine.scene);
+    this.rig = new CameraRig(world, this);
 
     this.bob = 0;
     this.bobAmount = 0;
@@ -82,6 +94,8 @@ export class Player {
   _look(dt) {
     const inp = this.input;
     if (!inp) return;
+    // The camera's locked ease-in owns the view for its two seconds.
+    if (this.rig.inputLocked) return;
     const s = inp.sensitivity;
     this.yaw -= inp.mouseDX * s;
     this.pitch -= inp.mouseDY * s * (inp.invertY ? -1 : 1);
@@ -106,6 +120,8 @@ export class Player {
     this._noiseT += dt;
 
     if (this.vehicle) {
+      if (this.sitting) this.standUp();
+      this.sit01 = lerp(this.sit01, 0, 1 - Math.exp(-dt * 5));
       this._updateDriving(dt);
       this._applyCamera(dt);
       return;
@@ -129,15 +145,33 @@ export class Player {
 
     /* --- intent -------------------------------------------------------- */
     const ax = inp ? inp.axes(this._axes) : this._axes;
-    const wantSprint = inp && (inp.down('ShiftLeft') || inp.down('ShiftRight'));
-    const wantCrouch = inp && (inp.down('ControlLeft') || inp.down('KeyC'));
-    const wantUp = inp && inp.down('Space');
-    const wantDown = inp && (inp.down('ShiftLeft') || inp.down('KeyZ'));
+    let wantSprint = inp && (inp.down('ShiftLeft') || inp.down('ShiftRight'));
+    let wantCrouch = inp && (inp.down('ControlLeft') || inp.down('KeyC'));
+    let wantUp = inp && inp.down('Space');
+    let wantDown = inp && (inp.down('ShiftLeft') || inp.down('KeyZ'));
+
+    // Raw intent, before the camera lock swallows it: the rig watches this to
+    // know when movement should break first person.
+    this.rawMove = Math.hypot(ax.x, ax.y) > 0.06 || !!wantUp;
+    if (this.rig.inputLocked) {
+      ax.x = 0;
+      ax.y = 0;
+      wantSprint = wantCrouch = wantUp = wantDown = false;
+    }
     // Drifting keeps shift for the speed boost, so descending moves to crouch.
     const wantSink = inp && (wantCrouch || inp.down('KeyZ'));
 
-    this.crouch = lerp(this.crouch, wantCrouch && !this.swimming && !this.drifting ? 1 : 0, 1 - Math.exp(-dt * 11));
-    this.eye = lerp(EYE, EYE_CROUCH, this.crouch);
+    /* --- sitting ------------------------------------------------------- */
+    if (inp && inp.hit('KeyX') && !this.rig.inputLocked && !this.drifting && !this.swimming) {
+      if (this.sitting) this.standUp();
+      else if (this.onGround) this.sitDown();
+    }
+    if (this.sitting && !this.rig.inputLocked && this.rawMove) this.standUp();
+    if (this.sitting && (this.swimming || this.drifting)) this.standUp();
+    this.sit01 = lerp(this.sit01, this.sitting ? 1 : 0, 1 - Math.exp(-dt * 5));
+
+    this.crouch = lerp(this.crouch, wantCrouch && !this.swimming && !this.drifting && !this.sitting ? 1 : 0, 1 - Math.exp(-dt * 11));
+    this.eye = lerp(lerp(EYE, EYE_CROUCH, this.crouch), EYE_SIT, this.sit01);
 
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
@@ -168,7 +202,9 @@ export class Player {
         vel.z += fd[1] * push;
       }
     } else {
-      this._updateWalk(dt, wishX, wishZ, wishLen, wantUp, ground, water);
+      // Rising out of the sit pose damps the first strides, so standing up
+      // reads as a motion instead of a snap.
+      this._updateWalk(dt, wishX, wishZ, wishLen * (1 - this.sit01), wantUp && this.sit01 < 0.3, ground, water);
     }
 
     /* --- collisions with the built world -------------------------------- */
@@ -502,16 +538,18 @@ export class Player {
       sy = (Math.cos(this._noiseT * 53) + Math.sin(this._noiseT * 29)) * s;
     }
 
-    cam.position.set(
+    FP_EYE.set(
       this.position.x + bobX,
       this.position.y + this.eye + bobY + breathe + swim - this.landDip * 0.4,
       this.position.z
     );
     if (this.vehicle) {
       const v = this.vehicle;
-      cam.position.set(v.camPos.x, v.camPos.y, v.camPos.z);
+      FP_EYE.set(v.camPos.x, v.camPos.y, v.camPos.z);
     }
-    cam.rotation.set(this.pitch + sy, this.yaw + sx, Math.sin(this.bob) * 0.012 * this.bobAmount + swim * 0.3);
+    const roll = Math.sin(this.bob) * 0.012 * this.bobAmount + swim * 0.3;
+    this.rig.update(dt, FP_EYE, roll, sx, sy);
+    this.character.update(dt, this);
 
     // Field of view breathes with speed, which sells running - and in flight it
     // is the only cue that you are doing 120 m/s, since there is no engine and
@@ -548,7 +586,27 @@ export class Player {
 
   /* ------------------------------------------------------------ abilities */
 
+  sitDown() {
+    if (this.sitting) return;
+    this.sitting = true;
+    this.velocity.x = 0;
+    this.velocity.z = 0;
+    // If this spot faces a wall, a slope or a trunk, turn toward the view.
+    this.sitYaw = this.rig.chooseSitYaw();
+    if (!this._satBefore) {
+      this._satBefore = true;
+      this.world.note('You sat down for a while. The world went on without you, gently.', 'note');
+    }
+  }
+
+  standUp() {
+    if (!this.sitting) return;
+    this.sitting = false;
+    this.sitYaw = null;
+  }
+
   toggleDrift() {
+    if (this.sitting) this.standUp();
     this.drifting = !this.drifting;
     if (this.drifting) {
       this.world.note('You let go of the ground. Hold shift to cover ground fast.', 'event');
@@ -565,7 +623,7 @@ export class Player {
   }
 
   eyePosition(out = new THREE.Vector3()) {
-    return out.copy(this.camera.position);
+    return out.set(this.position.x, this.position.y + this.eye, this.position.z);
   }
 
   /** Compass heading in degrees, 0 = north (-Z). */

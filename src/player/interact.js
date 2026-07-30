@@ -48,7 +48,9 @@ export class Interaction {
     this.heldTorchLight.visible = !!holdingTorch;
     if (holdingTorch) {
       const f = 0.8 + 0.2 * Math.sin(w.time * 21) * Math.sin(w.time * 13);
-      this.heldTorchLight.position.copy(w.engine.camera.position);
+      // At the body, not the camera - in third person the camera is metres
+      // behind you and a light there would glow from empty air.
+      this.heldTorchLight.position.copy(p.eyePosition(this._origin));
       this.heldTorchLight.intensity = 62 * f;
       if (Math.random() < dt * 22) {
         const fwd = p.forward(this._dir);
@@ -71,6 +73,10 @@ export class Interaction {
     }
 
     this._findTarget();
+    if (p.sitting && !this.prompt) {
+      this.prompt = '<kbd>X</kbd> stand up';
+      this.secondary = 'or just move';
+    }
 
     if (inp) {
       if (inp.hit('KeyE') || inp.clicked[0]) this._act();
@@ -92,8 +98,9 @@ export class Interaction {
   _findTarget() {
     const w = this.world;
     const p = w.player;
-    const cam = w.engine.camera;
-    this._origin.copy(cam.position);
+    // Reach is measured from the body's own eyes: the third-person camera
+    // sits metres behind them and would put "in front of you" at your heels.
+    p.eyePosition(this._origin);
     p.forward(this._dir);
     const held = this.inv.current;
     const key = held.key;

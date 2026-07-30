@@ -11,6 +11,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 export const assets = {
   trees: null, // { name: { bark, leaf, farBark, farLeaf, tex: {bark, leaf} } }
   terrain: false, // true when the baked terrain splat sets are present
+  character: null, // { scene, clips } - the rigged player body, see bake-character.mjs
   texture: null, // (path, {srgb}) -> THREE.Texture, cached
 };
 
@@ -81,6 +82,18 @@ export async function loadAssets(base = 'assets/') {
     assets.terrain = res.ok;
   } catch {
     assets.terrain = false;
+  }
+
+  try {
+    const res = await fetch(base + 'character/MANIFEST.json');
+    if (!res.ok) throw new Error('manifest http ' + res.status);
+    const manifest = await res.json();
+    const gltf = await new GLTFLoader().loadAsync(base + 'character/' + manifest.file);
+    if (!gltf.animations || !gltf.animations.length) throw new Error('no animation clips');
+    assets.character = { scene: gltf.scene, clips: gltf.animations };
+  } catch (e) {
+    console.warn('baked character unavailable, using procedural body:', e.message);
+    assets.character = null;
   }
   return assets;
 }
