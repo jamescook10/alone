@@ -1,0 +1,44 @@
+{
+  "species": {
+    "oak": {
+      "bark": "oak",
+      "leaf": "oak"
+    },
+    "pine": {
+      "bark": "pine",
+      "leaf": "pine"
+    },
+    "birch": {
+      "bark": "birch",
+      "leaf": "aspen"
+    },
+    "acacia": {
+      "bark": "oak",
+      "leaf": "ash"
+    },
+    "willow": {
+      "bark": "willow",
+      "leaf": "ash"
+    },
+    "snag": {
+      "bark": "willow",
+      "leaf": null
+    },
+    "jungle": {
+      "bark": "oak",
+      "leaf": "ash"
+    },
+    "spruce": {
+      "bark": "pine",
+      "leaf": "pine"
+    },
+    "bush": {
+      "bark": "oak",
+      "leaf": "oak"
+    },
+    "sapling": {
+      "bark": "oak",
+      "leaf": "oak"
+    }
+  }
+}

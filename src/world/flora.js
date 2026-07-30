@@ -10,10 +10,20 @@ import * as THREE from 'three';
 import { makeFoliageMaterial, makeSolidMaterial, grassTexture } from '../gfx/materials.js';
 import { Rng, hash3f, clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 import { BIOME_INFO } from './worldgen.js';
+import { assets } from '../gfx/assets.js';
 
 export const SPECIES = {
   OAK: 0, PINE: 1, BIRCH: 2, PALM: 3, ACACIA: 4, CACTUS: 5, WILLOW: 6, SNAG: 7,
   JUNGLE: 8, SPRUCE: 9, BUSH: 10, FERN: 11, SAPLING: 12,
+};
+
+// Species with baked ez-tree geometry (see scripts/bake-trees.mjs). Palm,
+// cactus and fern keep their hand-built forms.
+const BAKED_NAME = {
+  [SPECIES.OAK]: 'oak', [SPECIES.PINE]: 'pine', [SPECIES.BIRCH]: 'birch',
+  [SPECIES.ACACIA]: 'acacia', [SPECIES.WILLOW]: 'willow', [SPECIES.SNAG]: 'snag',
+  [SPECIES.JUNGLE]: 'jungle', [SPECIES.SPRUCE]: 'spruce', [SPECIES.BUSH]: 'bush',
+  [SPECIES.SAPLING]: 'sapling',
 };
 
 export const SPECIES_INFO = [
@@ -507,15 +517,50 @@ export class Flora {
 
     this.barkPools = [];
     this.leafPools = [];
-    this.farPools = [];
+    this.farBarkPools = [];
+    this.farLeafPools = [];
+    this._barkMats = {};
+    this._leafMats = {};
     for (let sp = 0; sp < SPECIES_INFO.length; sp++) {
-      const g = buildSpecies(sp, world.seed);
       const cap = SPECIES_INFO[sp].cap;
-      this.barkPools[sp] = g.bark ? new Pool(g.bark, this.barkMat, cap, this.scene) : null;
-      this.leafPools[sp] = g.leaf ? new Pool(g.leaf, this.leafMat, cap, this.scene) : null;
-      const farPool = new Pool(buildFarSpecies(sp, world.seed), this.leafMat, cap * 2, this.scene);
-      farPool.mesh.castShadow = false;
-      this.farPools[sp] = farPool;
+      const H = SPECIES_INFO[sp].height;
+      const baked = assets.trees && assets.trees[BAKED_NAME[sp]];
+      if (baked && baked.bark) {
+        // Baked geometry is normalised to unit height; scale it (once) to
+        // this species' height so the rest of the game - interaction ranges,
+        // fruit placement, growth - keeps its existing size logic.
+        if (!baked.scaled) {
+          for (const k of ['bark', 'leaf', 'farBark', 'farLeaf']) {
+            if (baked[k]) {
+              baked[k].scale(H, H, H);
+              baked[k].computeBoundingSphere();
+            }
+          }
+          baked.scaled = true;
+        }
+        const bMat = this._barkMaterial(baked.tex.bark);
+        const lMat = baked.tex.leaf ? this._leafMaterial(baked.tex.leaf) : null;
+        this.barkPools[sp] = new Pool(baked.bark, bMat, cap, this.scene);
+        this.leafPools[sp] = baked.leaf && lMat ? new Pool(baked.leaf, lMat, cap, this.scene) : null;
+        const fb = new Pool(baked.farBark, bMat, cap * 2, this.scene);
+        fb.mesh.castShadow = false;
+        this.farBarkPools[sp] = fb;
+        if (baked.farLeaf && lMat) {
+          const fl = new Pool(baked.farLeaf, lMat, cap * 2, this.scene);
+          fl.mesh.castShadow = false;
+          this.farLeafPools[sp] = fl;
+        } else {
+          this.farLeafPools[sp] = null;
+        }
+      } else {
+        const g = buildSpecies(sp, world.seed);
+        this.barkPools[sp] = g.bark ? new Pool(g.bark, this.barkMat, cap, this.scene) : null;
+        this.leafPools[sp] = g.leaf ? new Pool(g.leaf, this.leafMat, cap, this.scene) : null;
+        const farPool = new Pool(buildFarSpecies(sp, world.seed), this.leafMat, cap * 2, this.scene);
+        farPool.mesh.castShadow = false;
+        this.farBarkPools[sp] = farPool;
+        this.farLeafPools[sp] = null;
+      }
     }
 
     // Rocks: one blobby geometry, scaled and rotated per instance.
@@ -540,6 +585,36 @@ export class Flora {
     this.chunks = new Map(); // node -> entry
     this.plantIndex = new Map(); // cell key -> [plant records] for lookup
     this.worldDay = 0;
+  }
+
+  /** One material per bark texture set, shared by every species that uses it. */
+  _barkMaterial(name) {
+    if (!this._barkMats[name]) {
+      const mat = makeFoliageMaterial({
+        key: 'bark_' + name, stiffness: 0.05, sway: 0.35,
+        map: assets.texture(`trees/tex/${name}_color.jpg`),
+        normalMap: assets.texture(`trees/tex/${name}_normal.jpg`, { srgb: false }),
+        roughnessMap: assets.texture(`trees/tex/${name}_roughness.jpg`, { srgb: false }),
+        uniforms: this.growUniform,
+      });
+      this._patchGrowth(mat);
+      this._barkMats[name] = mat;
+    }
+    return this._barkMats[name];
+  }
+
+  _leafMaterial(name) {
+    if (!this._leafMats[name]) {
+      const mat = makeFoliageMaterial({
+        key: 'leafx_' + name, stiffness: 0.11, sway: 1.0, doubleSide: true,
+        translucency: 0.85, colorVar: 0.45, alphaTest: 0.5,
+        map: assets.texture(`trees/tex/${name}_color.png`),
+        uniforms: this.growUniform,
+      });
+      this._patchGrowth(mat);
+      this._leafMats[name] = mat;
+    }
+    return this._leafMats[name];
   }
 
   _patchGrowth(mat) {
@@ -606,11 +681,21 @@ export class Flora {
 
   /* ------------------------------------------------------------- streaming */
 
+  /** Distance from the player to the nearest edge of a chunk. */
+  _chunkDist(node) {
+    const p = this.world.player ? this.world.player.position : { x: 0, z: 0 };
+    const dx = Math.max(node.x - p.x, 0, p.x - (node.x + node.size));
+    const dz = Math.max(node.z - p.z, 0, p.z - (node.z + node.size));
+    return Math.hypot(dx, dz);
+  }
+
   onChunkLoaded(node, scatter) {
     const entry = {
       node,
-      // Only the ring you can actually walk through gets full geometry.
-      far: node.lod >= 1,
+      // Only the ring you can actually walk through gets full geometry -
+      // and with baked trees that ring is priced by distance, not just LOD:
+      // a full quadtree leaf can still be 250m away.
+      far: node.lod >= 1 || this._chunkDist(node) > 195,
       visible: true,
       plants: [], // {sp, slotBark, slotLeaf, slotFruit, x,y,z, scale, rot, id, birth, health, fruit}
       rocks: [],
@@ -671,15 +756,15 @@ export class Flora {
   }
 
   _poolsFor(rec) {
-    if (rec.far) return [this.farPools[rec.sp], null];
+    if (rec.far) return [this.farBarkPools[rec.sp], this.farLeafPools[rec.sp]];
     return [this.barkPools[rec.sp], this.leafPools[rec.sp]];
   }
 
   _addPlant(entry, p) {
     const info = SPECIES_INFO[p.sp];
     const far = !!entry.far;
-    const bp = far ? this.farPools[p.sp] : this.barkPools[p.sp];
-    const lp = far ? null : this.leafPools[p.sp];
+    const bp = far ? this.farBarkPools[p.sp] : this.barkPools[p.sp];
+    const lp = far ? this.farLeafPools[p.sp] : this.leafPools[p.sp];
     const rec = {
       sp: p.sp, x: p.x, y: p.y, z: p.z, scale: p.scale, rot: p.rot,
       id: p.id, health: p.health !== undefined ? p.health : 1,
@@ -971,13 +1056,37 @@ export class Flora {
     return rec;
   }
 
+  /**
+   * Chunks don't reload as you walk, so promote/demote their detail tier by
+   * rebuilding from the scatter the node still holds. Hysteresis (170/220)
+   * keeps a chunk from thrashing at the boundary.
+   */
+  _retier(dt) {
+    this._retierT = (this._retierT || 0) - dt;
+    if (this._retierT > 0) return;
+    this._retierT = 0.7;
+    for (const entry of this.chunks.values()) {
+      const node = entry.node;
+      if (node.lod !== 0 || !node.scatter) continue;
+      const d = this._chunkDist(node);
+      const want = entry.far ? d > 170 : d > 220;
+      if (want !== entry.far) {
+        this.onChunkUnloaded(node);
+        this.onChunkLoaded(node, node.scatter);
+        break; // one rebuild per tick spreads the cost
+      }
+    }
+  }
+
   update(dt) {
     this.worldDay = this.world.sky.day + this.world.sky.time;
     this.growUniform.uWorldDay.value = this.worldDay;
     if (dt > 0) this._ripenFruit(dt);
+    if (dt > 0) this._retier(dt);
     this.barkPools.forEach((p) => p && p.commit());
     this.leafPools.forEach((p) => p && p.commit());
-    this.farPools.forEach((p) => p && p.commit());
+    this.farBarkPools.forEach((p) => p && p.commit());
+    this.farLeafPools.forEach((p) => p && p.commit());
     this.rockPool.commit();
     this.grassPool.commit();
     this.fruitPool.commit();

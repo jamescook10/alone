@@ -7,6 +7,7 @@ import { UI } from './ui/hud.js';
 import { Audio } from './audio/audio.js';
 import { WorldGen } from './world/worldgen.js';
 import { clamp } from './core/noise.js';
+import { loadAssets } from './gfx/assets.js';
 
 const canvas = document.getElementById('view');
 const uiRoot = document.getElementById('ui');
@@ -100,7 +101,11 @@ function start() {
   requestAnimationFrame(() => setTimeout(() => boot(loading), 16));
 }
 
-function boot(loading) {
+async function boot(loading) {
+  // Baked geometry loads before the world exists, so the flora pools can be
+  // built around it. If it fails, the procedural builders take over.
+  loading.textContent = 'gathering what grows here';
+  await loadAssets();
   engine = new Engine(canvas);
   input = new Input(canvas);
 

@@ -6,6 +6,7 @@
 // animal wants to go.
 
 import * as THREE from 'three';
+import { buildAnimal } from './animalMeshes.js';
 import { makeSolidMaterial } from '../gfx/materials.js';
 import { injectAtmosphere } from '../gfx/atmosphere.js';
 import { Noise, Rng, clamp, lerp, saturate, smoothstep } from '../core/noise.js';
@@ -21,7 +22,7 @@ const SPECIES = [
     body: [0.14, 0.14, 0.26], legs: 0.16, neck: 0.10, col: [0.20, 0.17, 0.135], ears: true,
     biomes: [BIOME.MEADOW, BIOME.GRASSLAND, BIOME.FOREST, BIOME.TUNDRA], call: null, voice: 0 },
   { key: 'boar', name: 'boar', gait: GAIT.WALK, size: 0.8, speed: 4.6, flee: 12, herd: 4, cap: 16,
-    body: [0.32, 0.34, 0.66], legs: 0.38, neck: 0.26, col: [0.10, 0.082, 0.070],
+    body: [0.32, 0.34, 0.66], legs: 0.38, neck: 0.26, col: [0.10, 0.082, 0.070], tusks: true,
     biomes: [BIOME.FOREST, BIOME.RAINFOREST, BIOME.SWAMP], call: 'boar', voice: 0.01 },
   { key: 'wolf', name: 'wolf', gait: GAIT.WALK, size: 0.75, speed: 5.6, flee: 0, herd: 4, cap: 12,
     body: [0.24, 0.26, 0.72], legs: 0.52, neck: 0.30, col: [0.145, 0.140, 0.135], curious: true,
@@ -55,158 +56,12 @@ const SPECIES = [
     biomes: [BIOME.MEADOW, BIOME.GRASSLAND, BIOME.RAINFOREST, BIOME.SWAMP], call: null, voice: 0 },
 ];
 
-/* ------------------------------------------------------- geometry per kind */
-
-class Limbs {
-  constructor() {
-    this.pos = [];
-    this.norm = [];
-    this.col = [];
-    this.limb = [];
-    this.pivot = [];
-    this.idx = [];
-  }
-  box(cx, cy, cz, hx, hy, hz, col, limbId = 0, pivot = null) {
-    const base = this.pos.length / 3;
-    const px = pivot ? pivot[0] : 0, py = pivot ? pivot[1] : 0, pz = pivot ? pivot[2] : 0;
-    const V = [
-      [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-      [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
-    ];
-    const F = [
-      [0, 1, 2, 3, 0, 0, -1], [5, 4, 7, 6, 0, 0, 1], [4, 0, 3, 7, -1, 0, 0],
-      [1, 5, 6, 2, 1, 0, 0], [3, 2, 6, 7, 0, 1, 0], [4, 5, 1, 0, 0, -1, 0],
-    ];
-    for (const f of F) {
-      const s = this.pos.length / 3;
-      for (let k = 0; k < 4; k++) {
-        const v = V[f[k]];
-        this.pos.push(cx + v[0] * hx, cy + v[1] * hy, cz + v[2] * hz);
-        this.norm.push(f[4], f[5], f[6]);
-        this.col.push(col[0], col[1], col[2]);
-        this.limb.push(limbId);
-        this.pivot.push(px, py, pz);
-      }
-      this.idx.push(s, s + 1, s + 2, s, s + 2, s + 3);
-    }
-    return base;
-  }
-  /** A tapered wedge, good for heads, snouts, wings and tails. */
-  wedge(cx, cy, cz, hx, hy, hz, taper, col, limbId = 0, pivot = null) {
-    const px = pivot ? pivot[0] : 0, py = pivot ? pivot[1] : 0, pz = pivot ? pivot[2] : 0;
-    const t = taper;
-    const V = [
-      [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-      [-t, -t, 1], [t, -t, 1], [t, t, 1], [-t, t, 1],
-    ];
-    const F = [
-      [0, 1, 2, 3, 0, 0, -1], [5, 4, 7, 6, 0, 0, 1], [4, 0, 3, 7, -1, 0, 0],
-      [1, 5, 6, 2, 1, 0, 0], [3, 2, 6, 7, 0, 1, 0], [4, 5, 1, 0, 0, -1, 0],
-    ];
-    for (const f of F) {
-      const s = this.pos.length / 3;
-      for (let k = 0; k < 4; k++) {
-        const v = V[f[k]];
-        this.pos.push(cx + v[0] * hx, cy + v[1] * hy, cz + v[2] * hz);
-        this.norm.push(f[4], f[5], f[6]);
-        this.col.push(col[0], col[1], col[2]);
-        this.limb.push(limbId);
-        this.pivot.push(px, py, pz);
-      }
-      this.idx.push(s, s + 1, s + 2, s, s + 2, s + 3);
-    }
-  }
-  geometry() {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.norm, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.setAttribute('aLimb', new THREE.Float32BufferAttribute(this.limb, 1));
-    g.setAttribute('aPivot', new THREE.Float32BufferAttribute(this.pivot, 3));
-    g.setIndex(this.idx);
-    g.computeBoundingSphere();
-    return g;
-  }
-}
-
-function buildAnimal(sp) {
-  const L = new Limbs();
-  const c = sp.col;
-  const dark = [c[0] * 0.62, c[1] * 0.62, c[2] * 0.62];
-  const pale = [Math.min(1, c[0] * 1.55 + 0.05), Math.min(1, c[1] * 1.5 + 0.05), Math.min(1, c[2] * 1.4 + 0.05)];
-  const [bx, by, bz] = sp.body;
-  const legY = sp.legs;
-
-  if (sp.gait === GAIT.SWIM) {
-    L.wedge(0, 0, 0, bx, by, bz, 0.42, c, 0);
-    L.wedge(0, 0, -bz * 1.35, bx * 0.22, by * 0.95, bz * 0.42, 0.15, dark, 6, [0, 0, -bz]);
-    if (sp.fins) {
-      L.box(bx * 1.1, 0, bz * 0.1, bx * 0.9, by * 0.06, bz * 0.24, dark, 7, [0, 0, 0]);
-      L.box(-bx * 1.1, 0, bz * 0.1, bx * 0.9, by * 0.06, bz * 0.24, dark, 8, [0, 0, 0]);
-      L.box(0, by * 1.15, -bz * 0.1, bx * 0.10, by * 0.5, bz * 0.3, dark, 0);
-    }
-    return L.geometry();
-  }
-
-  if (sp.gait === GAIT.FLY) {
-    L.wedge(0, 0, 0, bx, by, bz, 0.4, c, 0);
-    L.box(0, by * 0.5, bz * 1.05, bx * 0.7, by * 0.7, bz * 0.32, pale, 5, [0, 0, bz]);
-    L.wedge(0, 0, -bz * 1.4, bx * 0.6, by * 0.15, bz * 0.5, 0.5, dark, 6, [0, 0, -bz]);
-    const w = sp.wings;
-    L.wedge(w * 0.55, by * 0.35, 0, w * 0.55, by * 0.09, bz * 0.75, 0.45, sp.key === 'butterfly' ? pale : dark, 7, [0, by * 0.35, 0]);
-    L.wedge(-w * 0.55, by * 0.35, 0, w * 0.55, by * 0.09, bz * 0.75, 0.45, sp.key === 'butterfly' ? pale : dark, 8, [0, by * 0.35, 0]);
-    return L.geometry();
-  }
-
-  // Quadruped.
-  L.box(0, legY + by, 0, bx, by, bz, c, 0);
-  if (sp.hump) L.box(0, legY + by * 1.9, -bz * 0.1, bx * 0.7, by * 0.7, bz * 0.36, c, 0);
-  // neck + head
-  const neckTopY = legY + by + sp.neck;
-  L.wedge(0, legY + by + sp.neck * 0.5, bz * 0.82, bx * 0.42, sp.neck * 0.62, bz * 0.28, 0.8, c, 5, [0, legY + by, bz * 0.7]);
-  L.box(0, neckTopY, bz * 1.0, bx * 0.44, by * 0.5, bz * 0.34, c, 5, [0, legY + by, bz * 0.7]);
-  L.wedge(0, neckTopY - by * 0.1, bz * 1.28, bx * 0.28, by * 0.30, bz * 0.22, 0.7, dark, 5, [0, legY + by, bz * 0.7]);
-  if (sp.ears) {
-    L.box(bx * 0.42, neckTopY + by * 1.0, bz * 0.9, bx * 0.14, by * 1.0, bz * 0.10, pale, 5, [0, legY + by, bz * 0.7]);
-    L.box(-bx * 0.42, neckTopY + by * 1.0, bz * 0.9, bx * 0.14, by * 1.0, bz * 0.10, pale, 5, [0, legY + by, bz * 0.7]);
-  }
-  if (sp.antlers) {
-    for (const s of [-1, 1]) {
-      L.box(s * bx * 0.35, neckTopY + by * 0.85, bz * 0.95, bx * 0.06, by * 0.85, bz * 0.05, pale, 5, [0, legY + by, bz * 0.7]);
-      L.box(s * bx * 0.62, neckTopY + by * 1.45, bz * 0.95, bx * 0.30, by * 0.05, bz * 0.05, pale, 5, [0, legY + by, bz * 0.7]);
-      L.box(s * bx * 0.86, neckTopY + by * 1.9, bz * 0.85, bx * 0.05, by * 0.45, bz * 0.05, pale, 5, [0, legY + by, bz * 0.7]);
-    }
-  }
-  if (sp.horns) {
-    for (const s of [-1, 1]) {
-      L.wedge(s * bx * 0.4, neckTopY + by * 0.8, bz * 0.75, bx * 0.09, by * 0.75, bz * 0.09, 0.3, pale, 5, [0, legY + by, bz * 0.7]);
-    }
-  }
-  // tail
-  if (sp.bushyTail) {
-    L.wedge(0, legY + by * 1.1, -bz * 1.35, bx * 0.55, by * 0.55, bz * 0.55, 0.3, pale, 6, [0, legY + by, -bz]);
-  } else {
-    L.wedge(0, legY + by * 1.2, -bz * 1.15, bx * 0.13, by * 0.16, bz * 0.35, 0.4, dark, 6, [0, legY + by, -bz]);
-  }
-  // four legs
-  const lx = bx * 0.72;
-  const lz = bz * 0.62;
-  const legR = bx * 0.20;
-  let limbId = 1;
-  for (const sz of [1, -1]) {
-    for (const sx of [-1, 1]) {
-      L.box(sx * lx, legY * 0.5, sz * lz, legR, legY * 0.5, legR, dark, limbId, [sx * lx, legY, sz * lz]);
-      limbId++;
-    }
-  }
-  return L.geometry();
-}
-
 /* ------------------------------------------------------------- the system */
 
 const ANIM_PARS = /* glsl */ `
 attribute float aLimb;
 attribute vec3 aPivot;
+attribute vec3 aPivot2;
 attribute float aPhase;
 attribute vec3 aMotion; // x: gait, y: speed 0..1, z: alertness
 uniform float uAnimTime;
@@ -237,6 +92,19 @@ const ANIM_BODY = /* glsl */ `
       transformed = rotAxis( transformed, aPivot, vec3( 1.0, 0.0, 0.0 ), ang );
     } else if ( aLimb > 5.5 && aLimb < 6.5 ) {
       transformed = rotAxis( transformed, aPivot, vec3( 0.0, 1.0, 0.0 ), sin( t * 1.6 ) * 0.32 );
+    } else if ( aLimb > 8.5 ) {
+      // Lower leg: follows its hip's swing, folds at the knee on the
+      // backswing so the foot lifts instead of mowing through the ground.
+      float li = aLimb - 8.0;
+      float off2 = ( li < 2.5 ? 0.0 : 3.14159 ) + ( mod( li, 2.0 ) > 0.5 ? 0.0 : 3.14159 );
+      float ang2 = sin( t + off2 ) * ( 0.16 + sp * 0.75 );
+      float bend = 0.06 + max( 0.0, -sin( t + off2 ) ) * ( 0.20 + sp * 0.85 ) * min( 1.0, sp * 4.0 + aMotion.z );
+      if ( gait > 2.5 ) {
+        ang2 = max( 0.0, sin( t ) ) * ( 0.2 + sp * 1.25 );
+        bend = 0.08 + max( 0.0, -sin( t ) ) * min( 1.0, sp * 4.0 ) * 0.55;
+      }
+      transformed = rotAxis( transformed, aPivot2, vec3( 1.0, 0.0, 0.0 ), bend );
+      transformed = rotAxis( transformed, aPivot, vec3( 1.0, 0.0, 0.0 ), ang2 );
     }
     if ( gait > 2.5 ) transformed.y += max( 0.0, sin( t ) ) * sp * 0.30;
   } else if ( gait < 1.5 ) {
@@ -270,7 +138,9 @@ export class Wildlife {
     this.rng = new Rng(world.seed ^ 0x1a2b);
     this.animTime = { value: 0 };
 
-    this.mat = makeSolidMaterial({ key: 'animal', flat: true, roughness: 0.82 });
+    // Smooth shading now: the bodies are rounded spines, and flat shading
+    // would refacet every curve.
+    this.mat = makeSolidMaterial({ key: 'animal', flat: false, roughness: 0.82 });
     this._patch(this.mat);
 
     this.pools = SPECIES.map((sp) => {

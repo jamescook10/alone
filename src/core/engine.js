@@ -141,10 +141,9 @@ export class Engine {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = this.quality.shadows;
-    // Soft-edged shadows: the extra filter taps cost far less than they look
-    // like they should, and hard shadow edges are the single quickest way for
-    // a natural scene to read as "video game".
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // r185 folded the old PCFSoft path into plain PCF (PCFSoftShadowMap is
+    // deprecated and just logs a warning), so PCF is the soft option now.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.setClearColor(0x87a7c4, 1);
     this.renderer.info.autoReset = false;
 

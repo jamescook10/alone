@@ -342,13 +342,16 @@ export function makeWaterMaterial() {
 export function makeFoliageMaterial(opts = {}) {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.86,
+    roughness: opts.roughnessMap ? 1.0 : 0.86,
     metalness: 0,
     side: opts.doubleSide ? THREE.DoubleSide : THREE.FrontSide,
     alphaTest: opts.alphaTest || 0,
     map: opts.map || null,
+    normalMap: opts.normalMap || null,
+    roughnessMap: opts.roughnessMap || null,
     transparent: false,
   });
+  if (opts.normalMap) mat.normalScale.set(0.8, 0.8);
   injectAtmosphere(mat, {
     key: 'foliage' + (opts.key || ''),
     vertexPars: WIND_PARS + `\nvarying float vWind;\n`,

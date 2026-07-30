@@ -91,7 +91,7 @@ vec3 skyRadiance( vec3 dir, vec3 sun ) {
   float mu = clamp( dot( dir, sun ), -1.0, 1.0 );
   // Flatter than 1/(y+0.22): that curve made the zenith a quarter of the
   // horizon's brightness and the top of every daytime frame read as dusk.
-  float airMass = 1.0 / ( y * 0.72 + 0.25 );
+  float airMass = 1.0 / ( y * 0.60 + 0.28 );
   float sunPath = 1.0 / ( max( sun.y, 0.0 ) + 0.085 );
 
   float phaseR = 0.0596831 * ( 1.0 + mu * mu );
@@ -413,7 +413,7 @@ export class Sky {
     const sun = this.sunDir;
     const y = Math.max(dy, -0.1);
     const mu = clamp(dx * sun.x + dy * sun.y + dz * sun.z, -1, 1);
-    const airMass = 1 / (y * 0.72 + 0.25);
+    const airMass = 1 / (y * 0.60 + 0.28);
     const sunPath = 1 / (Math.max(sun.y, 0) + 0.085);
     const phaseR = 0.0596831 * (1 + mu * mu);
     const g = MIE_G;

@@ -135,8 +135,18 @@ src/ui/      hud, journal, settings
 
 ## House style
 
-- No assets. Every texture, mesh and sound is generated at run time. Keep it
-  that way — it is the whole point, and it keeps the download tiny.
+- Assets are **baked, not hand-made, and not fetched at run time**. The owner
+  lifted the original no-assets rule to get a polished look: trees are now
+  generated offline by `scripts/bake-trees.mjs` (ez-tree, MIT) into
+  `public/assets/`, with their textures vendored from the same MIT package —
+  see `public/assets/trees/LICENSE.md`. The world is still procedurally
+  *placed* and everything still works (procedural fallbacks) if the assets
+  fail to load. Keep new assets CC0/MIT, keep the pack a few MB, and prefer
+  bake scripts over checked-in binaries wherever possible so the "generated
+  world" spirit survives.
+- Budgets for baked trees: ~600–1100 triangles near, ~60–100 far. The near
+  ring holds hundreds of full-detail trees at once; `Flora._retier` demotes
+  chunks past ~200 m to the far pools, so both numbers matter.
 - Comments explain *why*, especially where a number was tuned or a trap was
   avoided. Do not narrate what the code already says.
 - Commit messages: what changed and what it fixes, with the measurement if
