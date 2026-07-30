@@ -34,6 +34,7 @@ export class Player {
     this.drifting = false;
     this.vehicle = null;
     this.sprint = 0;
+    this.boost = 0;
     this.speed = 0;
 
     this.breath = 1;
@@ -129,8 +130,10 @@ export class Player {
     const wantCrouch = inp && (inp.down('ControlLeft') || inp.down('KeyC'));
     const wantUp = inp && inp.down('Space');
     const wantDown = inp && (inp.down('ShiftLeft') || inp.down('KeyZ'));
+    // Drifting keeps shift for the speed boost, so descending moves to crouch.
+    const wantSink = inp && (wantCrouch || inp.down('KeyZ'));
 
-    this.crouch = lerp(this.crouch, wantCrouch && !this.swimming ? 1 : 0, 1 - Math.exp(-dt * 11));
+    this.crouch = lerp(this.crouch, wantCrouch && !this.swimming && !this.drifting ? 1 : 0, 1 - Math.exp(-dt * 11));
     this.eye = lerp(EYE, EYE_CROUCH, this.crouch);
 
     const sin = Math.sin(this.yaw);
@@ -146,10 +149,11 @@ export class Player {
       wishZ /= wishLen;
     }
 
-    this.sprint = lerp(this.sprint, wantSprint && wishLen > 0.2 && this.energy > 0.05 ? 1 : 0, 1 - Math.exp(-dt * 6));
+    // Sprint is a body thing: it costs energy and it does not apply in flight.
+    this.sprint = lerp(this.sprint, wantSprint && !this.drifting && wishLen > 0.2 && this.energy > 0.05 ? 1 : 0, 1 - Math.exp(-dt * 6));
 
     if (this.drifting) {
-      this._updateDrift(dt, wishX, wishZ, wishLen, wantUp, wantDown, ground);
+      this._updateDrift(dt, wishX, wishZ, wishLen, wantUp, wantSink, wantSprint);
     } else if (this.swimming) {
       this._updateSwim(dt, wishX, wishZ, wishLen, wantUp, wantDown, water, ground);
     } else {
@@ -289,20 +293,36 @@ export class Player {
     }
   }
 
-  _updateDrift(dt, wishX, wishZ, wishLen, wantUp, wantDown, ground) {
+  _updateDrift(dt, wishX, wishZ, wishLen, wantUp, wantDown, wantBoost) {
     const pos = this.position;
     const vel = this.velocity;
+    // Flight is for reading the land, not for strolling: cruising is eight
+    // times walking pace and the boost is thirty, so a biome you can see on
+    // the horizon is under a minute away rather than ten.
+    this.boost = lerp(this.boost, wantBoost ? 1 : 0, 1 - Math.exp(-dt * 2.6));
+    const cruise = lerp(34, 128, this.boost);
+    // Space and crouch climb at a fixed rate; diving with the mouse is what
+    // gets you down fast, and that scales with cruise below.
+    const climb = lerp(16, 44, this.boost);
+
     const horiz = Math.cos(this.pitch);
-    let dx = wishX * horiz;
-    let dz = wishZ * horiz;
-    let dy = wishLen > 0.01 ? Math.sin(this.pitch) : 0;
-    if (wantUp) dy += 1;
-    if (wantDown) dy -= 1;
-    const target = lerp(9, 44, this.sprint) * clamp(wishLen + (wantUp || wantDown ? 0.8 : 0), 0, 1.4);
-    const k = 1 - Math.exp(-dt * 2.2);
-    vel.x += (dx * target - vel.x) * k;
-    vel.y += (dy * target - vel.y) * k;
-    vel.z += (dz * target - vel.z) * k;
+    const drive = clamp(wishLen, 0, 1);
+    const dx = wishX * horiz;
+    const dz = wishZ * horiz;
+    const dy = wishLen > 0.01 ? Math.sin(this.pitch) : 0;
+    const lift = (wantUp ? 1 : 0) - (wantDown ? 1 : 0);
+
+    const tx = dx * cruise * drive;
+    const tz = dz * cruise * drive;
+    const ty = dy * cruise * drive + lift * climb;
+
+    // Momentum going up, a firmer hand coming off the throttle, so stopping
+    // over the thing you flew to look at does not take a hundred metres.
+    const moving = drive > 0.01 || lift !== 0;
+    const k = 1 - Math.exp(-dt * (moving ? 2.4 : 4.2));
+    vel.x += (tx - vel.x) * k;
+    vel.y += (ty - vel.y) * k;
+    vel.z += (tz - vel.z) * k;
     pos.addScaledVector(vel, dt);
     const gh = this.world.terrain.heightAt(pos.x, pos.z);
     if (pos.y < gh + 0.4) {
@@ -479,8 +499,14 @@ export class Player {
     }
     cam.rotation.set(this.pitch + sy, this.yaw + sx, Math.sin(this.bob) * 0.012 * this.bobAmount + swim * 0.3);
 
-    // Field of view breathes with speed, which sells running.
-    const targetFov = this.vehicle ? 74 + clamp(this.speed * 0.35, 0, 16) : 68 + this.sprint * 5.5;
+    // Field of view breathes with speed, which sells running - and in flight it
+    // is the only cue that you are doing 120 m/s, since there is no engine and
+    // nothing close enough to stream past you.
+    const targetFov = this.vehicle
+      ? 74 + clamp(this.speed * 0.35, 0, 16)
+      : this.drifting
+        ? 68 + clamp(this.speed * 0.20, 0, 22)
+        : 68 + this.sprint * 5.5;
     if (Math.abs(cam.fov - targetFov) > 0.02) {
       cam.fov = lerp(cam.fov, targetFov, 1 - Math.exp(-dt * 4));
       cam.updateProjectionMatrix();
@@ -511,7 +537,9 @@ export class Player {
   toggleDrift() {
     this.drifting = !this.drifting;
     if (this.drifting) {
-      this.world.note('You let go of the ground.', 'event');
+      this.world.note('You let go of the ground. Hold shift to cover ground fast.', 'event');
+    } else {
+      this.boost = 0;
     }
     return this.drifting;
   }
