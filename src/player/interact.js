@@ -198,9 +198,9 @@ export class Interaction {
         this.secondary = `${info.name} · ${(m * 100) | 0}% grown`;
         if (key === 'axe') this.prompt = `<kbd>E</kbd> fell the ${info.name}`;
         else if (key === 'torch' && this.inv.find('torch').lit) this.prompt = `<kbd>E</kbd> set the ${info.name} alight`;
-        else if (pl.slotFruit >= 0) this.prompt = `<kbd>E</kbd> pick ${info.fruit}`;
-        else if (info.fruit) this.prompt = `<kbd>E</kbd> look for fruit · <kbd>Q</kbd> take a seed`;
-        else this.prompt = `<kbd>Q</kbd> take a seed`;
+        else if (pl.slotFruit >= 0) this.prompt = `<kbd>E</kbd> pick ${info.fruit} · <kbd>Q</kbd> take a seed`;
+        else if (info.fruit) this.prompt = `<kbd>E</kbd> search the branches · <kbd>Q</kbd> take a seed`;
+        else this.prompt = `<kbd>E</kbd> look closer · <kbd>Q</kbd> take a seed`;
         break;
       }
       case 'fire':
@@ -307,7 +307,8 @@ export class Interaction {
           w.note(`You picked ${fruit}.`, 'event');
           return;
         }
-        this._takeSeed(hit);
+        if (info.fruit) this._searchForFruit(hit);
+        else this._examine(hit);
         return;
       }
       case 'fire': {
@@ -421,6 +422,44 @@ export class Interaction {
     }
   }
 
+  /** E on a bearing species with nothing on it: say honestly why. */
+  _searchForFruit(hit) {
+    const w = this.world;
+    const pl = hit.plant;
+    const info = SPECIES_INFO[pl.sp];
+    if (w.audio) w.audio.footstep('leaves', 0.55);
+    const m = w.flora.maturity(pl);
+    if (m < 0.55) {
+      w.note(`This ${info.name} is too young to be carrying anything.`, 'note');
+      return;
+    }
+    if (!w.flora.bearsFruit(pl)) {
+      w.note(`You search the branches. This ${info.name} bears nothing.`, 'note');
+      return;
+    }
+    const hours = w.flora.hoursUntilFruit(pl);
+    if (hours > 0.05) {
+      w.note(`Picked bare. Another ${fmtHours(hours)} before there is more.`, 'note');
+    } else {
+      w.note(`Nothing ripe within reach.`, 'note');
+    }
+  }
+
+  /** E on something that never fruits: just look at it properly. */
+  _examine(hit) {
+    const w = this.world;
+    const pl = hit.plant;
+    const info = SPECIES_INFO[pl.sp];
+    const h = w.flora.height(pl);
+    const m = (w.flora.maturity(pl) * 100) | 0;
+    w.note(
+      m >= 99
+        ? `A full-grown ${info.name}, ${h.toFixed(1)} metres of it.`
+        : `A ${info.name}, ${h.toFixed(1)} metres and still growing. ${m}% there.`,
+      'note'
+    );
+  }
+
   _takeSeed(hit) {
     const w = this.world;
     const pl = hit.plant;
@@ -475,6 +514,11 @@ export class Interaction {
     }
     if (t.kind === 'plant') this._takeSeed(t.plant);
   }
+}
+
+function fmtHours(h) {
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} minutes`;
+  return h < 2 ? 'an hour or so' : `${Math.round(h)} hours`;
 }
 
 const TMP = new THREE.Vector3();

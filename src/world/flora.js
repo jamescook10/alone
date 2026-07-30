@@ -681,7 +681,13 @@ export class Flora {
       birth: p.birth !== undefined ? p.birth : -(p.ageSeed || 0.5) * info.mature * 3.4,
       rate: 1 / info.mature,
       slotBark: -1, slotLeaf: -1, slotFruit: -1,
-      fruitTaken: p.fruitTaken || 0,
+      // Never picked reads as "picked infinitely long ago", not "picked at
+      // time zero" - otherwise nothing in the world bears fruit until day 1.2.
+      fruitTaken: p.fruitTaken !== undefined
+        ? p.fruitTaken
+        : (p.id !== undefined && this.world.edits.fruitTaken.has(p.id)
+            ? this.world.edits.fruitTaken.get(p.id)
+            : -1e9),
       far,
     };
     QUAT.setFromAxisAngle(UP, rec.rot);
@@ -705,12 +711,46 @@ export class Flora {
     }
     entry.plants.push(rec);
 
-    // Fruit, if this species bears any and the tree is old enough.
-    if (!far && info.fruit && rec.health > 0.6 && hash3f(rec.id & 4095, 11, 3) < info.fruitChance) {
-      const ripe = this.worldDay - rec.fruitTaken > 1.2;
-      if (ripe) this._attachFruit(entry, rec);
-    }
+    if (!far && this.fruitReady(rec)) this._attachFruit(entry, rec);
     return rec;
+  }
+
+  /** Whether this individual is a bearing tree at all. */
+  bearsFruit(rec) {
+    const info = SPECIES_INFO[rec.sp];
+    if (!info.fruit) return false;
+    if (rec.health <= 0.6) return false;
+    return hash3f(rec.id & 4095, 11, 3) < info.fruitChance;
+  }
+
+  /** Bearing, grown enough, and long enough since it was last stripped. */
+  fruitReady(rec) {
+    return this.bearsFruit(rec)
+      && this.maturity(rec) > 0.55
+      && this.worldDay - rec.fruitTaken >= FRUIT_REGROW;
+  }
+
+  /** Game-hours until this tree carries fruit again. */
+  hoursUntilFruit(rec) {
+    return Math.max(0, (FRUIT_REGROW - (this.worldDay - rec.fruitTaken)) * 24);
+  }
+
+  /**
+   * Fruit used to be attached only when a chunk loaded, so a tree you stripped
+   * stayed bare for the rest of the session. Walk the near chunks now and then
+   * and let them come back.
+   */
+  _ripenFruit(dt) {
+    this._ripenT = (this._ripenT || 0) - dt;
+    if (this._ripenT > 0) return;
+    this._ripenT = 2.5;
+    for (const entry of this.chunks.values()) {
+      if (!entry.visible || entry.far) continue;
+      for (const p of entry.plants) {
+        if (p.slotFruit >= 0) continue;
+        if (this.fruitReady(p)) this._attachFruit(entry, p);
+      }
+    }
   }
 
   _attachFruit(entry, rec) {
@@ -929,6 +969,7 @@ export class Flora {
   update(dt) {
     this.worldDay = this.world.sky.day + this.world.sky.time;
     this.growUniform.uWorldDay.value = this.worldDay;
+    if (dt > 0) this._ripenFruit(dt);
     this.barkPools.forEach((p) => p && p.commit());
     this.leafPools.forEach((p) => p && p.commit());
     this.farPools.forEach((p) => p && p.commit());
@@ -937,6 +978,11 @@ export class Flora {
     this.fruitPool.commit();
   }
 }
+
+// Game-days before a stripped tree carries fruit again. A day is 25 real
+// minutes, so this is a little over ten minutes: long enough to be worth
+// coming back for, short enough to happen within one sitting.
+export const FRUIT_REGROW = 0.45;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const EUL = new THREE.Euler();
