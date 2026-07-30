@@ -227,17 +227,18 @@ let preDropPixelRatio = 0;
 let recoverChecks = 0;
 
 function autoQuality() {
-  // Struggling: shed cost in order of least visible first.
-  if (smoothed < 40 && qualityStep < 5) {
+  // Struggling: resolution first, then shadows, then draw distance - the
+  // ladder for the flat-shaded pipeline, where pixels are the main cost.
+  if (smoothed < 40 && qualityStep < 4) {
     qualityStep++;
     recoverChecks = 0;
     if (qualityStep === 1) {
       preDropPixelRatio = engine.quality.pixelRatio;
       engine.setQuality({ pixelRatio: Math.max(0.7, engine.quality.pixelRatio * 0.75) });
-    } else if (qualityStep === 2) engine.setQuality({ volClouds: false });
-    else if (qualityStep === 3) engine.setQuality({ godrays: false });
-    else if (qualityStep === 4) engine.setQuality({ bloom: false });
-    else engine.setQuality({ shadows: false });
+    } else if (qualityStep === 2) {
+      engine.setQuality({ pixelRatio: Math.max(0.7, engine.quality.pixelRatio * 0.8) });
+    } else if (qualityStep === 3) engine.setQuality({ shadows: false });
+    else engine.setQuality({ farK: 0.3 });
     ui.toast('eased the graphics a little');
     return;
   }
@@ -247,10 +248,9 @@ function autoQuality() {
     recoverChecks++;
     if (recoverChecks >= 3) {
       recoverChecks = 0;
-      if (qualityStep === 5) engine.setQuality({ shadows: true });
-      else if (qualityStep === 4) engine.setQuality({ bloom: true });
-      else if (qualityStep === 3) engine.setQuality({ godrays: true });
-      else if (qualityStep === 2) engine.setQuality({ volClouds: true });
+      if (qualityStep === 4) engine.setQuality({ farK: 1 });
+      else if (qualityStep === 3) engine.setQuality({ shadows: true });
+      else if (qualityStep === 2) engine.setQuality({ pixelRatio: Math.min(preDropPixelRatio, engine.quality.pixelRatio / 0.8) });
       else engine.setQuality({ pixelRatio: preDropPixelRatio });
       qualityStep--;
     }

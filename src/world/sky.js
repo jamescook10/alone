@@ -1,9 +1,11 @@
-// Sky, sun, moon, stars, clouds, aurora - and the day/night cycle that drives
-// every light in the world.
+// Sky, sun, moon, stars, aurora - and the day/night cycle that drives every
+// light in the world.
 //
-// The sky shader and the CPU-side colour model are deliberately the same
-// approximation, so the fog on a distant mountain is exactly the colour of the
-// sky just above it.
+// The sky is a simple vertical gradient between palette stops keyed to the
+// sun's elevation: pale blue at noon, peach and pink around sunset, deep
+// indigo at night. The same two gradient colours feed the fog, the lights and
+// the water, so the horizon never shows a seam - agreement by construction
+// instead of by keeping two scattering models in step.
 
 import * as THREE from 'three';
 import { atmo } from '../gfx/atmosphere.js';
@@ -12,21 +14,6 @@ import { clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 
 const TAU = Math.PI * 2;
 
-// Shared between the shader and the CPU model below. They must agree, or the
-// fog on a distant ridge will not match the sky behind it.
-// 0.145: at 0.105 the whole sky metered dimmer than sunlit grass, which
-// inverted the contrast of every daytime frame. Raising it brightens sky,
-// fog and skylight together; adaptation then stops the ground at a level
-// below the sky, the way a camera would.
-const SKY_SCALE = 0.145;
-const BETA_R = [5.5, 13.0, 22.4];
-const BETA_M = 21.0;
-// A tighter forward lobe than the classic 0.8: at 0.8 the Mie halo was a
-// 30-degree white blob that washed out half the sky whenever the sun was in
-// frame. The amount is weather-driven - see update() - so a dry clear day
-// gets a compact brilliant sun and a humid one gets its haze back.
-const MIE_G = 0.87;
-
 const SKY_FRAG = /* glsl */ `
 precision highp float;
 varying vec3 vDir;
@@ -34,24 +21,15 @@ varying vec3 vDir;
 uniform vec3 uSunDir;
 uniform vec3 uMoonDir;
 uniform float uTime;
-uniform float uDayT;
-uniform float uCloudCover;
-uniform float uCloudDark;
-uniform float uOvercast;
+uniform vec3 uZenith;
+uniform vec3 uHorizon;
+uniform vec3 uSunTint;
 uniform float uStars;
 uniform float uAurora;
 uniform float uMoonPhase;
-uniform float uHaze;
-uniform float uMieK;
-uniform vec2 uWind;
 uniform sampler2D tNoise;
 uniform float uUnderwater;
 uniform vec3 uWaterFog;
-uniform float uExposure;
-
-const vec3 betaR = vec3( 5.5, 13.0, 22.4 );
-const float betaM = 21.0;
-#define SKY_SCALE 0.145
 
 float hash13( vec3 p ) {
   p = fract( p * 0.1031 );
@@ -69,57 +47,6 @@ float fbmTex( vec2 p ) {
   return v;
 }
 
-// The same fbm, but forced down the mip chain. Cloud rays that graze the
-// horizon cover enormous distances per pixel; without this bias the sky
-// dissolves into shimmering static.
-float fbmTexBias( vec2 p, float bias ) {
-  float v = 0.0, a = 0.5;
-  for ( int i = 0; i < 4; i++ ) {
-    v += a * ( texture2D( tNoise, p, bias ).r - 0.5 );
-    p = p * 2.03 + vec2( 3.1, 1.7 );
-    a *= 0.52;
-    bias += 0.5;
-  }
-  return v;
-}
-
-// Single-scattering approximation. Not physically exact, but it has the
-// behaviours that matter: blue overhead, bright band at the horizon, and a
-// long red sunset when the sun grazes the atmosphere.
-vec3 skyRadiance( vec3 dir, vec3 sun ) {
-  float y = max( dir.y, -0.10 );
-  float mu = clamp( dot( dir, sun ), -1.0, 1.0 );
-  // Flatter than 1/(y+0.22): that curve made the zenith a quarter of the
-  // horizon's brightness and the top of every daytime frame read as dusk.
-  float airMass = 1.0 / ( y * 0.60 + 0.28 );
-  float sunPath = 1.0 / ( max( sun.y, 0.0 ) + 0.085 );
-
-  float phaseR = 0.0596831 * ( 1.0 + mu * mu );
-  float g = 0.87;
-  // The HG lobe peaks near 110x, which - through the eye adaptation that
-  // pins apparent sky brightness - turned into a halo across half the frame.
-  // Capping the peak flattens only the inner ~6 degrees; the sun disc itself
-  // carries the core brightness.
-  float phaseM = min( 0.1193662 * ( ( 1.0 - g * g ) / pow( max( 1.0 + g * g - 2.0 * g * mu, 1e-4 ), 1.5 ) ), 4.0 );
-
-  vec3 transmit = exp( -betaR * 0.0118 * sunPath );
-  vec3 col = ( betaR * phaseR + vec3( betaM ) * phaseM * uMieK ) * airMass * SKY_SCALE * transmit;
-
-  // Daylight fade: below the horizon the sun contributes almost nothing.
-  float day = smoothstep( -0.22, 0.10, sun.y );
-  col *= day;
-
-  // Night sky: a cold, deep blue that never quite reaches black.
-  vec3 night = vec3( 0.008, 0.014, 0.032 ) * ( 0.55 + 0.45 * airMass * 0.28 );
-  float moonUp = smoothstep( -0.10, 0.22, uMoonDir.y ) * uMoonPhase;
-  night += vec3( 0.012, 0.017, 0.032 ) * moonUp * ( 0.4 + 0.6 * pow( max( dot( dir, uMoonDir ), 0.0 ), 3.0 ) );
-  col += night * ( 1.0 - day );
-
-  // Horizon haze.
-  col = mix( col, col * 0.72 + vec3( 0.10, 0.12, 0.15 ) * ( 0.3 + day ), uHaze * smoothstep( 0.30, -0.02, dir.y ) );
-  return col;
-}
-
 void main() {
   vec3 dir = normalize( vDir );
 
@@ -128,8 +55,17 @@ void main() {
     return;
   }
 
-  vec3 col = skyRadiance( dir, uSunDir );
   float day = smoothstep( -0.22, 0.10, uSunDir.y );
+
+  // The gradient. The 0.6 exponent keeps a broad bright band at the horizon,
+  // which is most of what makes a clear sky read as open air.
+  vec3 col = mix( uHorizon, uZenith, pow( clamp( dir.y, 0.0, 1.0 ), 0.60 ) );
+
+  // A warm wash around the sun's compass direction, strongest at the horizon
+  // and around sunrise/sunset. This is the whole "sunset" effect now.
+  float sunAmt = pow( max( dot( dir, uSunDir ), 0.0 ), 3.0 );
+  float low = 1.0 - smoothstep( 0.02, 0.38, uSunDir.y );
+  col = mix( col, uSunTint, sunAmt * ( 0.20 + low * 0.45 ) * smoothstep( -0.12, 0.02, uSunDir.y ) );
 
   /* stars ------------------------------------------------------------- */
   float nightF = ( 1.0 - day ) * uStars;
@@ -171,10 +107,9 @@ void main() {
 
   /* sun and moon ------------------------------------------------------ */
   float sunD = distance( dir, uSunDir );
-  float sunDisc = smoothstep( 0.0125, 0.0075, sunD );
-  float sunGlow = exp( -sunD * 9.0 ) * 0.35 + exp( -sunD * 2.2 ) * 0.09;
-  vec3 sunTint = mix( vec3( 1.0, 0.42, 0.16 ), vec3( 1.0, 0.96, 0.90 ), smoothstep( -0.02, 0.28, uSunDir.y ) );
-  col += sunTint * ( sunDisc * 14.0 + sunGlow * 2.6 ) * smoothstep( -0.06, 0.02, uSunDir.y );
+  float sunDisc = smoothstep( 0.0145, 0.0095, sunD );
+  float sunGlow = exp( -sunD * 7.0 ) * 0.30;
+  col += uSunTint * ( sunDisc * 3.2 + sunGlow ) * smoothstep( -0.06, 0.02, uSunDir.y );
 
   float moonD = distance( dir, uMoonDir );
   if ( moonD < 0.09 ) {
@@ -188,66 +123,14 @@ void main() {
   }
   col += vec3( 0.5, 0.53, 0.62 ) * exp( -moonD * 12.0 ) * 0.09 * uMoonPhase * ( 1.0 - day * 0.9 );
 
-  /* high cirrus -------------------------------------------------------- */
-  // A thin streaky sheet far above the cumulus slab. It catches the sun's
-  // tint long after the low clouds have gone grey, which is most of what a
-  // good sunset is. Threshold high: only the ridges of the noise survive, so
-  // a clear sky stays clear instead of going uniformly mottled.
-  if ( dir.y > 0.012 && uOvercast < 0.85 ) {
-    float tR = 7800.0 / max( dir.y, 0.06 );
-    vec2 pc = dir.xz * tR * 0.000045 + uWind * uTime * 0.00088;
-    float cf = fbmTexBias( pc * vec2( 0.7, 3.2 ), log2( 1.0 + tR * 0.0011 ) ) + 0.5;
-    float sunAmtC = pow( max( dot( dir, uSunDir ), 0.0 ), 5.0 );
-    float cirr = smoothstep( 0.70, 0.92, cf ) * 0.30 * ( 1.0 - uOvercast );
-    cirr *= 0.35 + 0.85 * uCloudCover;
-    // Strongest where it catches the sun. Spread evenly it stopped being
-    // cloud and became grime on the whole sky.
-    cirr *= 0.25 + 0.75 * sunAmtC;
-    cirr *= smoothstep( 0.012, 0.10, dir.y );
-    vec3 cirrCol = mix( vec3( 0.92, 0.94, 0.99 ), sunTint * 1.25, sunAmtC * 0.65 ) * ( 0.12 + 0.88 * day );
-    // Ice cloud scatters light in: it can only brighten the sky behind it.
-    // A plain mix let it grey out the glow around the sun instead.
-    col = mix( col, max( cirrCol, col ), cirr );
-  }
-
-  /* clouds ------------------------------------------------------------ */
-  if ( dir.y > 0.005 && uCloudCover > 0.001 ) {
-    vec2 windOff = uWind * uTime * 0.0016;
-    float dens = 0.0;
-    float lit = 0.0;
-    const int STEPS = 5;
-    for ( int i = 0; i < STEPS; i++ ) {
-      float fi = float( i ) / float( STEPS - 1 );
-      float hgt = mix( 900.0, 2100.0, fi );
-      float tRay = min( hgt / max( dir.y, 0.02 ), 60000.0 );
-      float bias = log2( 1.0 + tRay * 0.0026 );
-      vec2 p = dir.xz * tRay * 0.00030 + windOff * ( 1.0 + fi * 0.15 );
-      float f = fbmTexBias( p, bias ) + 0.5;
-      // Narrow band, steep cover response: at low cover only the strongest
-      // noise ridges become cloud, so "clear" means clear - the old edges
-      // laid faint grey mottle over the entire sky at 0.16 cover.
-      float shape = smoothstep( 0.99 - uCloudCover * 0.80, 1.08 - uCloudCover * 0.58, f + 0.30 );
-      // thinner at the top of the slab gives rounded tops
-      shape *= 1.0 - abs( fi - 0.42 ) * 1.15;
-      dens += max( shape, 0.0 );
-      lit += max( shape, 0.0 ) * ( 1.0 - fi );
-    }
-    dens = clamp( dens / float( STEPS ) * 2.6, 0.0, 1.0 );
-    dens *= smoothstep( 0.012, 0.16, dir.y );
-    float shade = clamp( lit / max( dens * float( STEPS ), 0.001 ) * 0.6, 0.0, 1.0 );
-
-    float sunAmt = pow( max( dot( dir, uSunDir ), 0.0 ), 6.0 );
-    vec3 cloudLit = mix( vec3( 0.95, 0.95, 0.97 ), sunTint * 1.15, 0.35 ) * ( 0.35 + 0.65 * day );
-    vec3 cloudDark = mix( vec3( 0.23, 0.26, 0.33 ), vec3( 0.10, 0.11, 0.15 ), uCloudDark ) * ( 0.30 + 0.70 * day );
-    vec3 cc = mix( cloudDark, cloudLit, shade );
-    cc += sunTint * sunAmt * 0.5 * day * ( 1.0 - uCloudDark * 0.6 );
-    col = mix( col, cc, dens * mix( 0.92, 0.99, uOvercast ) );
-  }
-
   // Ground haze below the horizon so there is no hard edge at the sea line.
   col = mix( col, col * 0.55 + vec3( 0.05, 0.06, 0.07 ), smoothstep( 0.0, -0.12, dir.y ) );
 
-  gl_FragColor = vec4( col * uExposure, 1.0 );
+  // A whisper of dither: a two-stop gradient over the whole dome bands
+  // visibly in 8 bits without it.
+  col += ( hash13( vec3( dir.xy * 1371.0, uTime ) ) - 0.5 ) * 0.006;
+
+  gl_FragColor = vec4( col, 1.0 );
 }
 `;
 
@@ -260,8 +143,24 @@ void main() {
 }
 `;
 
-const RGB_A = [0, 0, 0];
-const RGB_B = [0, 0, 0];
+/**
+ * The palette. Each stop is keyed to the sun's elevation (sin of altitude)
+ * and authored in sRGB, converted to the linear working space once at boot.
+ * zen/hor are the gradient, sun is both the disc tint and the light colour.
+ */
+const STOPS = [
+  { y: -0.40, zen: [0.020, 0.024, 0.075], hor: [0.052, 0.060, 0.130], sun: [1.0, 0.55, 0.30], sunI: 0.0 },
+  { y: -0.12, zen: [0.075, 0.075, 0.200], hor: [0.240, 0.170, 0.280], sun: [1.0, 0.48, 0.26], sunI: 0.0 },
+  { y: 0.02, zen: [0.355, 0.360, 0.610], hor: [0.995, 0.640, 0.480], sun: [1.0, 0.55, 0.30], sunI: 0.35 },
+  { y: 0.14, zen: [0.400, 0.575, 0.840], hor: [0.980, 0.800, 0.640], sun: [1.0, 0.80, 0.55], sunI: 0.85 },
+  { y: 0.42, zen: [0.445, 0.665, 0.930], hor: [0.840, 0.910, 0.965], sun: [1.0, 0.97, 0.90], sunI: 1.0 },
+];
+for (const s of STOPS) {
+  s.zenC = new THREE.Color().setRGB(...s.zen, THREE.SRGBColorSpace);
+  s.horC = new THREE.Color().setRGB(...s.hor, THREE.SRGBColorSpace);
+  s.sunC = new THREE.Color().setRGB(...s.sun, THREE.SRGBColorSpace);
+}
+
 const GREY = new THREE.Color();
 
 export class Sky {
@@ -275,25 +174,16 @@ export class Sky {
       uSunDir: { value: new THREE.Vector3(0, 1, 0) },
       uMoonDir: { value: new THREE.Vector3(0, -1, 0) },
       uTime: { value: 0 },
-      uDayT: { value: this.time },
-      uCloudCover: { value: 0.35 },
-      uCloudDark: { value: 0.0 },
-      uOvercast: { value: 0 },
+      uZenith: { value: new THREE.Color(0.2, 0.4, 0.8) },
+      uHorizon: { value: new THREE.Color(0.7, 0.8, 0.9) },
+      uSunTint: { value: new THREE.Color(1, 0.9, 0.8) },
       uStars: { value: 1 },
       uAurora: { value: 0 },
       uMoonPhase: { value: 0.7 },
-      uHaze: { value: 0.35 },
-      uMieK: { value: 0.20 },
-      uWind: { value: new THREE.Vector2(1, 0.2) },
       tNoise: { value: detailTexture() },
       uUnderwater: { value: 0 },
       uWaterFog: { value: new THREE.Color(0.06, 0.2, 0.26) },
-      uExposure: { value: 1.0 },
     };
-
-    // The ground-shadow field every world material samples uses the same
-    // noise the sky's clouds are built from.
-    atmo.tAtmoNoise.value = detailTexture();
 
     const geo = new THREE.BoxGeometry(2, 2, 2);
     const mat = new THREE.ShaderMaterial({
@@ -310,19 +200,6 @@ export class Sky {
     this.mesh.renderOrder = -1000;
     engine.scene.add(this.mesh);
 
-    // Environment probe: the same sky shader rendered into a small cubemap
-    // and prefiltered, so every rough or wet surface picks up real sky
-    // reflection that tracks the time of day. Refreshed every couple of
-    // seconds - the sun does not move faster than that.
-    this._envScene = new THREE.Scene();
-    this._envScene.add(new THREE.Mesh(geo, mat));
-    this._envRT = new THREE.WebGLCubeRenderTarget(64, { type: THREE.HalfFloatType });
-    this._envCam = new THREE.CubeCamera(0.1, 50, this._envRT);
-    this._pmrem = new THREE.PMREMGenerator(engine.renderer);
-    this._pmrem.compileCubemapShader();
-    this._envOut = null;
-    this._envT = 0;
-
     this.sunDir = new THREE.Vector3();
     this.moonDir = new THREE.Vector3();
     this.sunColor = new THREE.Color();
@@ -333,10 +210,9 @@ export class Sky {
     this.sunIntensity = 0;
     this.dayFactor = 1;
     this.ambientLevel = 0.3;
-    this.mieK = 0.20;
     this.cloudDim = 1;
     this.moonIntensity = 0;
-    this._tmp = new THREE.Vector3();
+    this.exposure = 1;
   }
 
   /** Hours as a 0..24 float, for the UI. */
@@ -366,7 +242,6 @@ export class Sky {
     }
     const t = this.time;
     this.uniforms.uTime.value += dt;
-    this.uniforms.uDayT.value = t;
 
     // Sun on an inclined path; the inclination drifts to give seasons.
     const season = Math.sin((this.day / 48) * TAU) * 0.38;
@@ -385,176 +260,79 @@ export class Sky {
     this.uniforms.uMoonDir.value.copy(this.moonDir);
 
     if (weather) {
-      // When the volumetric pass owns the clouds, the sky dome's flat slab
-      // stands down (the cirrus sheet stays - it lives far above the layer).
-      const vc = this.engine.volclouds;
-      const vol = vc && vc.enabled;
-      if (vc) {
-        vc.cover = weather.cloudCover;
-        vc.dark = weather.cloudDark;
-        vc.driftM.x += weather.windDir.x * dt * 9;
-        vc.driftM.y += weather.windDir.y * dt * 9;
-      }
-      this.uniforms.uCloudCover.value = vol ? 0 : weather.cloudCover;
-      this.uniforms.uCloudDark.value = weather.cloudDark;
-      this._adaptCover = weather.cloudCover;
-      this._adaptVol = !!vol;
-      this.uniforms.uOvercast.value = weather.overcast;
-      this.uniforms.uHaze.value = 0.10 + weather.humidity * 0.30 + weather.fog * 0.45;
-      this.uniforms.uWind.value.set(weather.windDir.x, weather.windDir.y);
       this.uniforms.uAurora.value = weather.aurora;
-      // How much air is in the air. Shader and CPU model share this value,
-      // or the fog on a ridge would stop matching the sky behind it.
-      const mieT = saturate(-0.05 + weather.humidity * 0.50 + weather.fog * 1.4 + weather.overcast * 0.40);
-      this.mieK = lerp(0.10, 0.46, mieT);
-      this.uniforms.uMieK.value = this.mieK;
-      atmo.uMieK.value = this.mieK;
+      this.uniforms.uStars.value = 1 - weather.overcast * 0.92;
     }
 
     this._computeColors(weather);
     this._applyLights(weather);
-    this._adapt(dt);
-
-    // Cloud shadows: patchy skies cast sweeping dapples; full overcast has
-    // already dimmed the sun itself, so its patchiness fades out rather than
-    // double-darkening. Strength carries the sun term so night costs nothing.
-    const cover = weather ? weather.cloudCover : this.uniforms.uCloudCover.value;
-    const over = weather ? weather.overcast : 0;
-    const patchy = saturate(cover * 1.6 - 0.10) * (1 - over * 0.85);
-    atmo.uCloudShadow.value = Math.min(0.62, patchy * this.sunIntensity * this.cloudDim);
-    atmo.uCloudShadowCover.value = cover;
-    const drift = dt * 0.0011;
-    atmo.uCloudOff.value.x += (weather ? weather.windDir.x : 1) * drift;
-    atmo.uCloudOff.value.y += (weather ? weather.windDir.y : 0.2) * drift;
-
-    this._envT -= dt;
-    if (this._envT <= 0) {
-      this._envT = 2.0;
-      const renderer = this.engine.renderer;
-      this._envCam.update(renderer, this._envScene);
-      const out = this._pmrem.fromCubemap(this._envRT.texture);
-      if (this._envOut) this._envOut.dispose();
-      this._envOut = out;
-      this.engine.scene.environment = out.texture;
-    }
-    this.engine.scene.environmentIntensity = this.uniforms.uUnderwater.value > 0.5 ? 0.08 : 0.5;
 
     if (camera) this.mesh.position.copy(camera.position);
   }
 
-  /**
-   * A direct port of skyRadiance() from the shader above. Fog, lights and
-   * water reflections all read from this, which is why the horizon never
-   * shows a seam between the sky and the land in front of it.
-   */
-  _radiance(dx, dy, dz, out) {
-    const sun = this.sunDir;
-    const y = Math.max(dy, -0.1);
-    const mu = clamp(dx * sun.x + dy * sun.y + dz * sun.z, -1, 1);
-    const airMass = 1 / (y * 0.60 + 0.28);
-    const sunPath = 1 / (Math.max(sun.y, 0) + 0.085);
-    const phaseR = 0.0596831 * (1 + mu * mu);
-    const g = MIE_G;
-    const phaseM = Math.min(0.1193662 * ((1 - g * g) / Math.pow(Math.max(1 + g * g - 2 * g * mu, 1e-4), 1.5)), 4.0);
-    const day = smoothstep(-0.22, 0.1, sun.y);
-
-    const moonUp = smoothstep(-0.1, 0.22, this.moonDir.y) * this.uniforms.uMoonPhase.value;
-    const moonMu = Math.max(dx * this.moonDir.x + dy * this.moonDir.y + dz * this.moonDir.z, 0);
-    const nightBase = [0.008, 0.014, 0.032];
-    const moonTint = [0.012, 0.017, 0.032];
-
-    const haze = this.uniforms.uHaze.value * smoothstep(0.3, -0.02, dy);
-    const hazeAdd = [0.1, 0.12, 0.15];
-
-    for (let i = 0; i < 3; i++) {
-      const transmit = Math.exp(-BETA_R[i] * 0.0118 * sunPath);
-      let c = (BETA_R[i] * phaseR + BETA_M * phaseM * this.mieK) * airMass * SKY_SCALE * transmit * day;
-      let night = nightBase[i] * (0.55 + 0.45 * airMass * 0.28);
-      night += moonTint[i] * moonUp * (0.4 + 0.6 * Math.pow(moonMu, 3));
-      c += night * (1 - day);
-      c = lerp(c, c * 0.72 + hazeAdd[i] * (0.3 + day), haze);
-      out[i] = c;
-    }
-    return out;
+  /** Sample the palette at a sun elevation. Outputs are linear colours. */
+  _palette(sy, zen, hor, sun) {
+    let i = 0;
+    while (i < STOPS.length - 2 && sy > STOPS[i + 1].y) i++;
+    const a = STOPS[i];
+    const b = STOPS[i + 1];
+    const k = smoothstep(a.y, b.y, clamp(sy, a.y, b.y));
+    zen.copy(a.zenC).lerp(b.zenC, k);
+    hor.copy(a.horC).lerp(b.horC, k);
+    sun.copy(a.sunC).lerp(b.sunC, k);
+    return lerp(a.sunI, b.sunI, k);
   }
 
   _computeColors(weather) {
     const sy = this.sunDir.y;
-    const day = smoothstep(-0.22, 0.10, sy);
-    this.dayFactor = day;
-    const goldenness = 1 - smoothstep(0.0, 0.32, sy);
+    this.dayFactor = smoothstep(-0.22, 0.10, sy);
 
-    // Zenith, straight up.
-    const z = this._radiance(0, 1, 0, RGB_A);
-    this.zenithColor.setRGB(z[0], z[1], z[2]);
-
-    // Horizon: an average of four compass directions plus a look toward the
-    // sun, so haze reddens in the right direction without banding.
-    const h = RGB_B;
-    h[0] = h[1] = h[2] = 0;
-    for (let k = 0; k < 4; k++) {
-      const a = (k / 4) * TAU;
-      const r = this._radiance(Math.cos(a), 0.045, Math.sin(a), RGB_A);
-      h[0] += r[0] * 0.1875;
-      h[1] += r[1] * 0.1875;
-      h[2] += r[2] * 0.1875;
-    }
-    const sd = this._tmp.set(this.sunDir.x, 0.045, this.sunDir.z).normalize();
-    const rs = this._radiance(sd.x, 0.045, sd.z, RGB_A);
-    h[0] += rs[0] * 0.25;
-    h[1] += rs[1] * 0.25;
-    h[2] += rs[2] * 0.25;
-    this.horizonColor.setRGB(h[0], h[1], h[2]);
-
-    // Direct sunlight: white overhead, orange at the horizon.
-    this.sunColor.setRGB(
-      1.0,
-      lerp(0.40, 0.97, smoothstep(-0.02, 0.30, sy)),
-      lerp(0.13, 0.92, smoothstep(0.0, 0.36, sy))
-    );
-    this.sunIntensity = smoothstep(-0.09, 0.14, sy);
-
-    const moonUp = smoothstep(-0.08, 0.20, this.moonDir.y);
-    this.moonIntensity = moonUp * this.uniforms.uMoonPhase.value * (1 - day);
+    this.sunIntensity = this._palette(sy, this.zenithColor, this.horizonColor, this.sunColor);
 
     let cloudDim = 1;
     if (weather) {
-      // The sky colours already go grey below, so this only takes the edge
-      // off the direct sun - dimming twice is what makes overcast look like
-      // midnight instead of like an overcast afternoon.
-      cloudDim = lerp(1, 0.62, weather.overcast) * lerp(1, 0.74, weather.cloudDark);
-      const g = lerp(0.016, 0.52, day) * lerp(1, 0.55, weather.cloudDark);
-      GREY.setRGB(g * 0.94, g * 0.98, g * 1.06);
-      this.zenithColor.lerp(GREY, weather.overcast * 0.88);
-      GREY.setRGB(g * 1.30, g * 1.34, g * 1.40);
-      this.horizonColor.lerp(GREY, weather.overcast * 0.85);
+      // Overcast greys the gradient toward its own luminance; the direct sun
+      // dims separately, so an overcast noon stays a bright grey afternoon
+      // instead of collapsing to dusk.
+      cloudDim = lerp(1, 0.55, weather.overcast) * lerp(1, 0.72, weather.cloudDark);
+      const grey = (c, m) => {
+        const l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+        GREY.setRGB(l * 0.96, l * 0.99, l * 1.05);
+        c.lerp(GREY, m);
+      };
+      grey(this.zenithColor, weather.overcast * 0.85);
+      grey(this.horizonColor, weather.overcast * 0.80);
+      const dk = lerp(1, 0.72, weather.cloudDark * weather.overcast);
+      this.zenithColor.multiplyScalar(dk);
+      this.horizonColor.multiplyScalar(dk);
     }
     this.cloudDim = cloudDim;
 
+    const moonUp = smoothstep(-0.08, 0.20, this.moonDir.y);
+    this.moonIntensity = moonUp * this.uniforms.uMoonPhase.value * (1 - this.dayFactor);
+
+    // Skylight: hue between the two gradient stops, level from their size.
     this.ambientColor.copy(this.horizonColor).lerp(this.zenithColor, 0.5);
     const amb = Math.max(this.ambientColor.r, this.ambientColor.g, this.ambientColor.b);
     if (amb > 1e-5) this.ambientColor.multiplyScalar(1 / amb); // hue only; brightness lives in intensity
     this.ambientLevel = amb;
-    this.groundColor.setRGB(0.30, 0.26, 0.19).lerp(this.ambientColor, 0.30);
+    this.groundColor.setRGB(0.42, 0.38, 0.30).lerp(this.ambientColor, 0.35);
 
-    // Share with every material in the world.
+    // Share with the sky dome and with every material in the world.
+    this.uniforms.uZenith.value.copy(this.zenithColor);
+    this.uniforms.uHorizon.value.copy(this.horizonColor);
+    this.uniforms.uSunTint.value.copy(this.sunColor).multiplyScalar(0.35 + 0.85 * this.sunIntensity * cloudDim);
     atmo.uSunDir.value.copy(this.sunDir);
-    // The glow the sun puts into haze, scaled by how bright the sky is.
-    const hz = Math.max(this.horizonColor.r, this.horizonColor.g, this.horizonColor.b);
-    atmo.uSunColor.value.copy(this.sunColor).multiplyScalar(hz * 1.7 + 0.015);
+    atmo.uSunColor.value.copy(this.sunColor).multiplyScalar((0.15 + 0.55 * this.sunIntensity) * cloudDim);
     atmo.uHorizonColor.value.copy(this.horizonColor);
     atmo.uZenithColor.value.copy(this.zenithColor);
-    this.uniforms.uStars.value = 1 - (weather ? weather.overcast * 0.92 : 0);
   }
 
   _applyLights(weather) {
     const e = this.engine;
     const dim = this.cloudDim;
     e.sun.color.copy(this.sunColor);
-    // 5.3, down from 6.4: with the eye pinned to apparent sky brightness,
-    // the old value left sunlit grass reading brighter than the sky itself -
-    // an inverted, lime-tinted contrast no photograph has.
-    e.sun.intensity = this.sunIntensity * 5.3 * dim;
+    e.sun.intensity = this.sunIntensity * 3.1 * dim;
     e.sun.visible = e.sun.intensity > 0.01;
 
     e.moon.color.setRGB(0.52, 0.64, 0.96);
@@ -563,33 +341,12 @@ export class Sky {
 
     e.hemi.color.copy(this.ambientColor);
     e.hemi.groundColor.copy(this.groundColor);
-    // Skylight scales with how bright the sky actually is, which keeps dawn,
-    // storms and starlight all lit by the right amount without any tuning.
-    e.hemi.intensity = (0.14 + this.ambientLevel * 8.6) * dim + this.moonIntensity * 0.16;
-  }
-
-  /**
-   * Eye adaptation. Aims for a constant apparent sky brightness, but keeps a
-   * ceiling at night so that darkness still reads as darkness.
-   */
-  _adapt(dt) {
-    const lum = (c) => c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
-    let mid = lum(this.horizonColor) * 0.42 + lum(this.zenithColor) * 0.58;
-    // The colour model doesn't know clouds exist, but the eye does. The flat
-    // slab renders BRIGHTER than the clear model (meter up or it blows out);
-    // the volumetric deck renders DARKER than it (meter down or midday under
-    // cloud looks like dusk).
-    const cov = this._adaptCover !== undefined ? this._adaptCover : this.uniforms.uCloudCover.value;
-    if (this._adaptVol) mid *= 1 - cov * 0.38 * this.dayFactor;
-    else mid *= 1 + cov * 1.2 * this.dayFactor;
-    // Aim brighter by day than by night: a clear daytime sky in a photograph
-    // sits well above middle grey. Metering it to 0.44 made mornings dusk.
-    const aim = lerp(0.46, 0.64, this.dayFactor);
-    let target = clamp(aim / Math.max(0.015, mid), 1.05, 3.4);
-    target = lerp(Math.min(target, 2.5), target, this.dayFactor);
-    if (this.exposure === undefined) this.exposure = target;
-    this.exposure = lerp(this.exposure, target, 1 - Math.exp(-dt * 0.55));
-    this.engine.renderer.toneMappingExposure = this.exposure;
+    // Skylight scales with the gradient's brightness, with a floor so night
+    // shadows stay readable rather than pitch black - the "lifted shadows"
+    // half of the flat look. The floor is small enough that unlit ground
+    // still sits below the night sky's horizon band.
+    e.hemi.intensity = (0.05 + this.ambientLevel * 1.55) * lerp(1, 0.85, weather ? weather.overcast : 0)
+      + this.moonIntensity * 0.22;
   }
 
   /** Place the shadow-casting light relative to the player. */
@@ -604,10 +361,9 @@ export class Sky {
     e.moon.target.updateMatrixWorld();
   }
 
-  /** Sky colour in a given direction, for water reflections and audio moods. */
+  /** Sky colour in a given direction - the same mix the fog uses. */
   radianceAt(dir, out = new THREE.Color()) {
-    const r = this._radiance(dir.x, dir.y, dir.z, RGB_A);
-    return out.setRGB(r[0], r[1], r[2]);
+    return out.copy(this.horizonColor).lerp(this.zenithColor, saturate(dir.y * 1.3));
   }
 
   setUnderwater(v, fogColor) {

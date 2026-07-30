@@ -51,7 +51,12 @@ await page.evaluate(([hour, weather]) => {
   const s = w.sky.sunDir;
   w.player.yaw = Math.atan2(-s.x, -s.z);
   w.player.pitch = Math.max(-0.05, Math.asin(Math.max(-1, Math.min(1, s.y))) * 0.5);
-  if (g.ui) g.ui.showHud(false);
+  if (g.ui) {
+    g.ui.showHud(false);
+    // The boot fade decays per rendered frame; at software-rendering frame
+    // rates it would still be near-black when the screenshot fires.
+    g.ui.fadeAmount = 0;
+  }
 }, [HOUR, WEATHER]);
 
 // Give the software rasteriser time to compile any new shader variants and

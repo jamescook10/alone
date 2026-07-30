@@ -5,6 +5,7 @@ import { WorldGen } from './worldgen.js';
 import { Terrain } from './terrain.js';
 import { Sky } from './sky.js';
 import { Weather } from './weather.js';
+import { Clouds } from './clouds.js';
 import { Flora } from './flora.js';
 import { Wildlife } from './wildlife.js';
 import { Civilisation } from './civilisation.js';
@@ -48,6 +49,7 @@ export class World {
 
     this.sky = new Sky(engine, { dayLength: opts.dayLength || 1500, startTime: opts.startTime });
     this.weather = new Weather(this);
+    this.clouds = new Clouds(this);
     this.physics = new Physics(this);
     this.fire = new FireSim(this);
     this.wildlife = new Wildlife(this);
@@ -88,6 +90,7 @@ export class World {
     const gy = this.terrain.heightAt(p.position.x, p.position.z);
     SHADOW_ANCHOR.set(p.position.x, Math.min(p.position.y, gy + 40), p.position.z);
     this.sky.positionLights(SHADOW_ANCHOR);
+    this.clouds.update(dt);
     this.flora.update(dt);
     this.fire.update(dt);
     this.physics.update(dt);

@@ -580,8 +580,6 @@ export class Player {
       atmo.uWaterDensity.value = 0.035 + saturate(depth / 300) * 0.055;
     }
     this.world.sky.setUnderwater(under, atmo.uWaterFog.value);
-    atmo.uWaterY.value = this.waterLevel === -Infinity ? 0 : this.waterLevel;
-    atmo.uCaustics.value = 1;
   }
 
   /* ------------------------------------------------------------ abilities */

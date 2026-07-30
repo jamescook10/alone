@@ -79,10 +79,7 @@ export class UI {
         <div class="row"><span>days passed</span><b class="days"></b></div>
         <h3>Comfort</h3>
         <div class="row"><span class="toggle" data-t="shadows">shadows</span><b class="v-shadows"></b></div>
-        <div class="row"><span class="toggle" data-t="bloom">bloom</span><b class="v-bloom"></b></div>
-        <div class="row"><span class="toggle" data-t="shafts">light shafts</span><b class="v-shafts"></b></div>
-        <div class="row"><span class="toggle" data-t="vclouds">volumetric clouds</span><b class="v-vclouds"></b></div>
-        <div class="row"><span class="toggle" data-t="grain">film grain</span><b class="v-grain"></b></div>
+        <div class="row"><span class="toggle" data-t="fardraw">draw distance</span><b class="v-fardraw"></b></div>
         <div class="row"><span class="toggle" data-t="look">look speed</span><b class="v-look"></b></div>
         <div class="row"><span class="toggle" data-t="sound">sound</span><b class="v-sound"></b></div>
         <div class="row"><span class="toggle" data-t="res">resolution</span><b class="v-res"></b></div>
@@ -165,14 +162,7 @@ export class UI {
     const q = e.quality;
     switch (which) {
       case 'shadows': e.setQuality({ shadows: !q.shadows }); break;
-      case 'bloom': e.setQuality({ bloom: !q.bloom }); break;
-      case 'shafts': e.setQuality({ godrays: !q.godrays }); break;
-      case 'vclouds': e.setQuality({ volClouds: !q.volClouds }); break;
-      case 'grain': {
-        const g = e.grade.uniforms.uGrain;
-        g.value = g.value > 0.001 ? 0 : 0.020;
-        break;
-      }
+      case 'fardraw': e.setQuality({ farK: q.farK < 1 ? 1 : 0.3 }); break;
       case 'look': {
         const inp = this.world.input;
         if (!inp) break;
@@ -188,8 +178,9 @@ export class UI {
         }
         break;
       case 'res': {
-        // Step through the sensible range rather than jumping to the extremes.
-        const steps = [0.7, 0.85, 1.0, 1.25, 1.5, Math.min(window.devicePixelRatio || 1, 2)];
+        // Step up to native device resolution and no further - supersampling
+        // buys nothing on flat shading.
+        const steps = [0.7, 0.85, 1.0, Math.min(window.devicePixelRatio || 1, 2)];
         const uniq = [...new Set(steps.map((v) => Math.round(v * 100) / 100))].sort((a, b) => a - b);
         const i = uniq.findIndex((v) => v > q.pixelRatio + 0.01);
         e.setQuality({ pixelRatio: i < 0 ? uniq[0] : uniq[i] });
@@ -215,10 +206,7 @@ export class UI {
       if (el) el.textContent = v;
     };
     set('shadows', e.quality.shadows ? 'on' : 'off');
-    set('bloom', e.quality.bloom ? 'on' : 'off');
-    set('shafts', e.quality.godrays ? 'on' : 'off');
-    set('vclouds', e.quality.volClouds ? 'on' : 'off');
-    set('grain', e.grade.uniforms.uGrain.value > 0.001 ? 'on' : 'off');
+    set('fardraw', e.quality.farK < 1 ? 'near' : 'far');
     set('look', this.world.input ? this.world.input.lookSpeed.toFixed(2).replace(/\.?0+$/, '') + '×' : '—');
     set('sound', this.world.audio && this.world.audio.enabled ? 'on' : 'off');
     set('res', e.quality.pixelRatio.toFixed(2) + '×');

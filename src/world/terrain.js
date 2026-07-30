@@ -12,8 +12,10 @@ import { clamp } from '../core/noise.js';
 export const ROOT_SIZE = 8192;
 export const MIN_SIZE = 128;
 export const MAX_DEPTH = Math.round(Math.log2(ROOT_SIZE / MIN_SIZE)); // 6
-const RES_NEAR = 48; // quads per chunk edge, close in
-const RES_FAR = 32;  // ...and further out, where nobody can tell
+// Coarser than the smooth-shaded era on purpose: big facets ARE the style,
+// and halving the grid quarters the terrain's triangle bill.
+const RES_NEAR = 32; // quads per chunk edge, close in
+const RES_FAR = 24;  // ...and further out, where nobody can tell
 const SPLIT_K = 2.1; // distance in node-sizes at which a node splits
 const ROOT_RADIUS = 2; // root cells kept around the player
 
