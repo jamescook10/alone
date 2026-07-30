@@ -84,6 +84,7 @@ export class Audio {
     this._waterPos = new THREE.Vector3();
     this._t = 0;
     this._lastBirdT = 0;
+    this._foot = 0;
   }
 
   resume() {
@@ -349,23 +350,58 @@ export class Audio {
 
   /* ------------------------------------------------------------- one-shots */
 
+  // The one sound you hear thousands of times, so it is mixed to sit under the
+  // wind rather than on top of it. Three things made the old one tiring: it was
+  // centred at 1.7-2.6 kHz, where hearing is most sensitive; it peaked 19-24 dB
+  // above the ambience; and every step was identical, which the ear tracks as a
+  // click track instead of habituating to.
   footstep(mat, force = 1) {
     const P = FOOT[mat] || FOOT.grass;
+    // Feet alternate. Two slightly different steps read as a body walking; one
+    // step repeated reads as a metronome, and a metronome is what you notice.
+    this._foot ^= 1;
+    const side = this._foot ? 1 : -1;
+    const bias = this._foot ? 1.05 : 0.95;
+    const level = P.gain * (0.30 + force * 0.75) * (0.80 + Math.random() * 0.40);
+    // Placed at the ground, a little to one side, so a step happens at your
+    // feet instead of in the middle of your head.
+    const pos = this._footPos(side);
     this.burst({
-      freq: P.freq * (0.85 + Math.random() * 0.3),
-      q: P.q, type: P.type || 'bandpass',
-      gain: P.gain * (0.55 + force * 0.6),
-      attack: 0.002, release: P.release,
-      rate: 0.9 + Math.random() * 0.25,
-      reverb: 0.16,
+      pos, refDist: 1.5, maxDist: 30,
+      freq: P.freq * bias * (0.88 + Math.random() * 0.24),
+      q: P.q, type: P.type || 'lowpass',
+      gain: level,
+      // Soft ground compresses under a foot, it does not click.
+      attack: P.attack || 0.014,
+      release: P.release * (0.85 + Math.random() * 0.30),
+      rate: 0.85 + Math.random() * 0.30,
+      reverb: 0.12,
     });
-    if (P.second) {
+    // The bright part is what tells you what you are standing on, so it stays -
+    // but quietly, and just after the body, which is the order a foot makes it.
+    if (P.tex) {
       this.burst({
-        freq: P.second, q: 0.8, gain: P.gain * 0.5 * force,
-        attack: 0.001, release: P.release * 0.6, delay: 0.012 + Math.random() * 0.02,
+        pos, refDist: 1.5, maxDist: 30,
+        freq: P.tex * (0.85 + Math.random() * 0.30), q: P.texQ || 0.9, type: 'bandpass',
+        gain: level * P.texGain, attack: 0.006,
+        release: P.texRel * (0.80 + Math.random() * 0.40),
+        delay: 0.008 + Math.random() * 0.022, reverb: 0.12,
       });
     }
-    if (mat === 'water') this.burst({ freq: 1500, q: 0.5, gain: 0.16 * force, release: 0.24, sweep: 400 });
+    if (mat === 'water') {
+      this.burst({
+        pos, refDist: 1.5, maxDist: 30, freq: 900, q: 0.6,
+        gain: level * 0.55, release: 0.22, sweep: 300, delay: 0.01, reverb: 0.12,
+      });
+    }
+  }
+
+  /** Where a footfall happens: on the ground, a little to one side. */
+  _footPos(side) {
+    const p = this.world.player;
+    if (!p) return null;
+    const rx = Math.cos(p.yaw), rz = -Math.sin(p.yaw);
+    return [p.position.x + rx * 0.17 * side, p.position.y + 0.05, p.position.z + rz * 0.17 * side];
   }
 
   jump() {
@@ -374,8 +410,12 @@ export class Audio {
 
   land(force, mat) {
     const P = FOOT[mat] || FOOT.grass;
-    this.burst({ freq: P.freq * 0.7, q: 0.7, gain: 0.28 * force + 0.08, release: 0.3 });
-    this.burst({ freq: 90, type: 'lowpass', q: 0.5, gain: 0.24 * force, release: 0.22 });
+    const pos = this._footPos(0);
+    // Landing should still be a moment, just not one that arrives 12 dB above
+    // the steps either side of it. The weight lives in the 80 Hz thump, which
+    // is felt more than heard and does not fatigue.
+    this.burst({ pos, refDist: 1.5, maxDist: 40, freq: P.freq * 0.8, type: 'lowpass', q: 0.7, gain: 0.17 * force + 0.05, attack: 0.006, release: 0.28 });
+    this.burst({ pos, refDist: 1.5, maxDist: 40, freq: 85, type: 'lowpass', q: 0.5, gain: 0.20 * force, release: 0.24 });
   }
 
   swimStroke(under) {
@@ -902,14 +942,22 @@ export class Audio {
 
 const PROBE = {};
 
+// A step is a soft, dark body - the weight going down - with a quiet band of
+// texture on top of it that says what the ground is made of. `tex` is a
+// fraction of the body's level, never its equal: brightness is what carries
+// information here, and also what wears you out.
 const FOOT = {
-  grass: { freq: 1750, q: 0.75, gain: 0.15, release: 0.085, second: 520 },
-  leaves: { freq: 2600, q: 0.5, gain: 0.17, release: 0.14, second: 800 },
-  sand: { freq: 1150, q: 0.55, gain: 0.15, release: 0.11 },
-  snow: { freq: 900, q: 1.6, gain: 0.19, release: 0.075, second: 2400 },
-  gravel: { freq: 2100, q: 1.1, gain: 0.19, release: 0.09, second: 620 },
-  stone: { freq: 700, q: 2.6, gain: 0.16, release: 0.055, second: 2000 },
-  wood: { freq: 300, q: 2.4, gain: 0.17, release: 0.09, second: 1100 },
-  mud: { freq: 420, q: 1.1, gain: 0.16, release: 0.16, second: 180 },
-  water: { freq: 1250, q: 0.5, gain: 0.16, release: 0.20 },
+// The gains read higher than the old bandpass numbers and are far quieter in
+// practice: a lowpass at 380 Hz passes a sixth of the energy that a Q 0.75
+// bandpass at 1750 Hz did, and the panner takes its own bite. Measured, not
+// guessed - grass walks at +9 dB over the ambience where it used to be +19.
+  grass: { freq: 380, q: 0.7, gain: 0.160, release: 0.115, tex: 1450, texGain: 0.26, texRel: 0.075 },
+  leaves: { freq: 440, q: 0.7, gain: 0.145, release: 0.145, tex: 1950, texGain: 0.34, texRel: 0.115, texQ: 0.7 },
+  sand: { freq: 300, q: 0.7, gain: 0.160, release: 0.130, tex: 950, texGain: 0.26, texRel: 0.090 },
+  snow: { freq: 480, q: 0.8, gain: 0.180, release: 0.085, tex: 1500, texGain: 0.30, texRel: 0.060, texQ: 1.6 },
+  gravel: { freq: 500, q: 0.8, gain: 0.175, release: 0.100, tex: 1750, texGain: 0.36, texRel: 0.085, texQ: 1.2 },
+  stone: { freq: 400, q: 1.6, gain: 0.185, release: 0.070, attack: 0.004, tex: 1600, texGain: 0.26, texRel: 0.045, texQ: 2.2 },
+  wood: { freq: 230, q: 1.8, gain: 0.175, release: 0.095, attack: 0.005, tex: 880, texGain: 0.28, texRel: 0.060, texQ: 1.4 },
+  mud: { freq: 260, q: 0.9, gain: 0.168, release: 0.170, tex: 620, texGain: 0.30, texRel: 0.130 },
+  water: { freq: 520, q: 0.7, gain: 0.168, release: 0.190, tex: 1300, texGain: 0.28, texRel: 0.150 },
 };
