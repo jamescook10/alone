@@ -112,7 +112,12 @@ varying float vUpY;
 float snowCover( vec3 wp ) {
   float t = uClimateTemp - max( wp.y, 0.0 ) * 0.0068;
   float climate = smoothstep( 4.0, -3.0, t );
-  float up = pow( clamp( vUpY, 0.0, 1.0 ), 1.4 );
+  // A soft threshold, not a power curve. The foliage here is chunky low-poly:
+  // a spruce tier is two rings of vertices, so a 1.4-power falloff averaged out
+  // to about a third across every visible face and the tree came out a pale
+  // green instead of a white one. This gives anything not pointing downward a
+  // proper covering and leaves the undersides dark.
+  float up = smoothstep( -0.25, 0.50, vUpY );
   return clamp( max( climate, uSnowAmount ) * up, 0.0, 1.0 );
 }
 `;

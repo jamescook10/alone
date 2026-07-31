@@ -185,7 +185,15 @@ class Build {
   }
 
   _writePiece(p) {
-    QUAT.setFromAxisAngle(UPV, p.yaw);
+    // Most pieces are upright and only need a yaw. The ones that are not - a
+    // heeled-over hull, a fallen standing stone, the panels of a tent, a wing
+    // lying in the grass - carry a pitch and a roll as well.
+    if (p.pitch || p.roll) {
+      EUL.set(p.pitch || 0, p.yaw, p.roll || 0, 'YXZ');
+      QUAT.setFromEuler(EUL);
+    } else {
+      QUAT.setFromAxisAngle(UPV, p.yaw);
+    }
     if (p.alive) {
       M4.compose(TMPV.set(p.x, p.y, p.z), QUAT, SCLV.set(p.hx * 2, p.hy * 2, p.hz * 2));
     } else {
