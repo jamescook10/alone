@@ -12,6 +12,9 @@ export const atmo = {
   uSunDir: { value: new THREE.Vector3(0.3, 0.7, 0.4) },
   uSunColor: { value: new THREE.Color(1.0, 0.92, 0.78) },
   uHorizonColor: { value: new THREE.Color(0.68, 0.76, 0.86) },
+  // The horizon away from the sun: the same colour by day, blue-violet while
+  // the sunward one is on fire.
+  uHorizonCool: { value: new THREE.Color(0.68, 0.76, 0.86) },
   uZenithColor: { value: new THREE.Color(0.30, 0.48, 0.78) },
   uFogDensity: { value: 0.00017 },
   uFogFalloff: { value: 0.0017 },
@@ -37,6 +40,7 @@ export const ATMO_PARS = /* glsl */ `
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec3 uHorizonColor;
+uniform vec3 uHorizonCool;
 uniform vec3 uZenithColor;
 uniform float uFogDensity;
 uniform float uFogFalloff;
@@ -70,7 +74,14 @@ vec3 atmoApply( vec3 color, vec3 wp, vec3 cam ) {
   amount = 1.0 - exp( -max( amount, 0.0 ) );
 
   float sunAmt = pow( max( dot( dir, uSunDir ), 0.0 ), 6.0 );
-  vec3 fogCol = mix( uHorizonColor, uZenithColor, clamp( dir.y * 1.3, 0.0, 1.0 ) );
+  // The horizon under the sun and the horizon behind you are not the same
+  // colour at dawn or dusk - one is on fire and the other is still blue. The
+  // sky dome makes the identical blend, or the distant hills would be warm
+  // against a cool sky and the join would show.
+  vec3 sunAz = normalize( vec3( uSunDir.x, 0.0, uSunDir.z ) + vec3( 1e-5, 0.0, 0.0 ) );
+  vec3 dirAz = normalize( vec3( dir.x, 0.0, dir.z ) + vec3( 1e-5, 0.0, 0.0 ) );
+  vec3 hor = mix( uHorizonCool, uHorizonColor, clamp( dot( dirAz, sunAz ) * 0.5 + 0.5, 0.0, 1.0 ) );
+  vec3 fogCol = mix( hor, uZenithColor, clamp( dir.y * 1.3, 0.0, 1.0 ) );
   fogCol = mix( fogCol, uSunColor, sunAmt * 0.5 );
   return mix( color, fogCol, clamp( amount, 0.0, 1.0 ) );
 }

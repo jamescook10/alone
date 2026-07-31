@@ -40,6 +40,12 @@ screen for real people. Always, before pushing:
    errors can still be visibly wrong. Several bugs here rendered perfectly
    cleanly and looked terrible. `npm run postcards -- shots/` takes one of each
    biome in a single browser session.
+5. If you touched the sky, `npm run skyshots -- shots/` instead. It stands you
+   on an open hilltop with no town in sight and takes the Milky Way, the moon's
+   phases, an aurora, a meteor, dawn, dusk, cirrus, a rainbow and a lightning
+   stroke - forcing each, because most of them happen on a few nights a year
+   and you cannot wait for one. Pass a substring as the fourth argument to
+   shoot only the matching frames.
 
 If you push something that turns out to be broken, revert first and diagnose
 second: `git revert <sha> && git push origin main` puts players back on a
@@ -127,6 +133,30 @@ triangles. Count before you build.
   `BIOME_INFO` are reflectances, not display colours. Raising one without the
   other is what made the first builds look like washed-out plastic, and then
   like midnight.
+- **The filmic curve is roughly quadratic near black, and it eats night skies.**
+  A physically scaled moonless zenith of 0.006 comes out of ACES at 0.0004,
+  which is one value in eight bits — the Milky Way, the aurora and every star
+  went with it. Two things fix it and they are not interchangeable: exposure
+  rises to 1.55 after dark (`Sky._applyLights`, and a full moon pulls it back
+  down, the way a full moon really does), and the night stops in `STOPS` are
+  painted well above the radiance they represent. That second lift belongs to
+  the *dome and the fog only* — skylight scales back by the same factor at
+  night, or an unlit hillside comes out brighter than the sky above it.
+- **The horizon under the sun and the horizon behind you are different
+  colours.** One warm stop applied all the way round turned every sunset into a
+  flat red wash from the ground to the zenith. `uHorizonCool` is the away-side
+  colour and `atmoApply` makes the identical azimuthal blend — change one,
+  change both, or distant hills glow warm against a cool sky.
+- **Instanced pools filled by a raster scan run out in the near corner.** Under
+  a solid overcast nearly every cloud cell is occupied, so the row-by-row loop
+  spent all eighty stratus slots on the first two rows and left the rest of the
+  sky empty. `Clouds.update` walks outward in square rings so the cap only ever
+  drops the furthest cloud.
+- **Additive geometry must not be `transparent: true`.** Three puts transparent
+  objects in a queue that renders after all the opaque ones, so a negative
+  `renderOrder` stops meaning anything and the star field hangs in front of the
+  hills. `transparent: false` with `blending: AdditiveBlending` keeps it in the
+  opaque queue where the render order still holds.
 
 ## Architecture in one paragraph each
 
@@ -191,12 +221,27 @@ terrain, trees, animals, buildings and debris the same fog, and the CPU
 evaluates the identical model (`Sky._radiance`) for fog colour, light colour,
 water reflection and exposure. Change one, change both, or the horizon splits.
 
+**The sky is a real one.** Everything above the horizon hangs on one 3×3 matrix
+in `stars.js`, built from the local sidereal time and a latitude that follows
+the region's climate — cold country gets a polar sky, jungle a tropical one, and
+it eases slowly enough that you never catch it moving. The sun's ecliptic
+longitude drives that sidereal time, so the seasons, the four-minute nightly
+drift of the constellations, and the moon's phases are consequences rather than
+fudges. Stars are a real catalogue (`starData.js`: right ascension, declination,
+magnitude and B–V for about 130 named stars in 23 figures) drawn as one `Points`
+call with a procedural field of fainter ones behind; planets are five circular
+heliocentric orbits differenced against the Earth's, which is why Venus is never
+far from the sun and Mars flares up at opposition. The Milky Way, the nebulae,
+the aurora and the meteors live in the dome shader in `sky.js`. Anything new up
+there should be authored in the frame it actually belongs to and rotated by
+`Stars.skyRot`, not painted onto the dome in world space.
+
 ```
 src/core/    noise + RNG · renderer, camera, post chain
 src/gfx/     atmosphere injection · procedural materials · particles
 src/world/   biomes (the table of places) · worldgen oracle
-             terrain + worker · sky · weather
-             flora · wildlife · civilisation · World (owns update order)
+             terrain + worker · sky · stars + star catalogue · weather
+             clouds · flora · wildlife · civilisation · World (update order)
 src/sim/     chemistry (heat, phase change) · fire · physics
 src/player/  input · player body · interaction · inventory
 src/audio/   synthesis · soundscape · generative score
