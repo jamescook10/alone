@@ -121,6 +121,12 @@ triangles. Count before you build.
   attribute declarations vanish while the code that uses them stays. Chain onto
   `onBeforeCompile` and target `varying vec3 vWorldPos;` instead — see
   `Wildlife._patch` and `Flora._patchGrowth`.
+- **three.js strips `.`, `[`, `]`, `:` and `/` out of node names on load**,
+  because those are the separators its animation-track paths are built from.
+  The character rig names its bones `upperleg.l`; by the time you can see
+  them they are `upperlegl`. A lookup table keyed the other way misses every
+  limb, moves nothing, and reports no error — everything in
+  `wandererMesh.js` goes through `norm()` for exactly this reason.
 - **Two transparent surfaces at nearly the same height produce moire.** The
   horizon plate sits at −2.2 m, writes depth and draws before the water.
 - **Physically scaled light needs physically scaled albedo.** Ground colours in
@@ -209,9 +215,12 @@ src/ui/      hud, journal, settings
   lifted the original no-assets rule to get a polished look: trees are now
   generated offline by `scripts/bake-trees.mjs` (ez-tree, MIT) into
   `public/assets/`, with their textures vendored from the same MIT package —
-  see `public/assets/trees/LICENSE.md`. The player's visible body is the
-  KayKit Rogue (CC0), stripped to locomotion + sitting clips by
+  see `public/assets/trees/LICENSE.md`. The player's body is **generated in
+  code** (`src/player/wandererMesh.js`); the only thing baked about it is its
+  motion — a skeleton and seven clips from the KayKit Rogue (CC0), with the
+  mesh and its atlas thrown away at bake time by
   `scripts/bake-character.mjs` — see `public/assets/character/LICENSE.md`.
+  Nothing the game loads at run time is a texture any more.
   The world is still procedurally *placed* and everything still works
   (procedural fallbacks) if the assets fail to load. Keep new assets CC0/MIT,
   keep the pack a few MB, and prefer bake scripts over checked-in binaries

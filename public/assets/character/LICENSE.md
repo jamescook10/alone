@@ -1,8 +1,14 @@
 # Character asset licence
 
-`wanderer.glb` is the Rogue from **KayKit : Adventurers Character Pack (1.0)**
-by Kay Lousberg (https://kaylousberg.com), licensed **CC0**, stripped down to
-locomotion and sitting by `scripts/bake-character.mjs`.
+`wanderer.glb` is the skeleton and seven animation clips of the Rogue from
+**KayKit : Adventurers Character Pack (1.0)** by Kay Lousberg
+(https://kaylousberg.com), licensed **CC0**, cut down to locomotion and
+sitting by `scripts/bake-character.mjs`.
+
+The visible body is **not** from this pack and none of its artwork ships
+here: the mesh and its texture atlas are discarded at bake time, and the
+player's body is generated in code by `src/player/wandererMesh.js`. What
+remains is joint positions and motion.
 
 Source: https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0 @ 672074b73ba276876a19e8816ecdc5241817ab47
 

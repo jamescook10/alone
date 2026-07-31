@@ -1,11 +1,15 @@
 // The body you are.
 //
-// The game was first-person only for its whole life, so this is the first
-// time the player has been visible. The visible body is the baked KayKit
-// Rogue (CC0, see public/assets/character/LICENSE.md) - a rigged, animated
-// traveller driven by an AnimationMixer. If the baked asset fails to load,
-// a body built from the same smooth spines as the animals steps in, so the
-// game still runs offline exactly like the trees do.
+// The baked KayKit pack (CC0, see public/assets/character/LICENSE.md) is now
+// animation data and nothing else - a skeleton and seven clips. The body
+// hung on it is grown in code from the same swept spines as the animals, in
+// the same flat-shaded solid colours as everything else, because after the
+// low-poly restyle the player was the only textured, smooth-shaded,
+// four-heads-tall object left in the world and it read as a sticker.
+//
+// See wandererMesh.js for the skeleton surgery and the body, cloak.js for
+// the cloth. If the baked asset fails to load, the older hand-posed body
+// below steps in, so the game still runs offline exactly like the trees do.
 //
 // Both bodies speak the same small interface the camera rig relies on:
 // update(dt, player) · setOpacity(o) · facing · dispose().
@@ -14,12 +18,31 @@ import * as THREE from 'three';
 import { clamp, lerp } from '../core/noise.js';
 import { SmoothLimbs } from '../world/animalMeshes.js';
 import { makeSolidMaterial } from '../gfx/materials.js';
-import { injectAtmosphere } from '../gfx/atmosphere.js';
 import { assets } from '../gfx/assets.js';
+import { reproportion, retargetClips, buildBody, norm } from './wandererMesh.js';
+import { Cloak } from './cloak.js';
 
-const HEIGHT = 1.80; // both bodies are normalised to this
+const HEIGHT = 1.80; // the procedural fallback is normalised to this
 const E_LOOK = new THREE.Euler();
 const Q_LOOK = new THREE.Quaternion();
+const Q_ROOT = new THREE.Quaternion();
+const Q_PAR = new THREE.Quaternion();
+const Q_INV = new THREE.Quaternion();
+const Q_AX = new THREE.Quaternion();
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+
+// The clips came off a combat character. Its idle holds the arms out from
+// the body with the elbows up, ready to draw a knife, and it stands with its
+// feet half a metre apart - which reads as a stance on a body four heads
+// tall and as carrying two invisible buckets on one that is seven and a
+// half. A rotation track transfers exactly, so this is not something the
+// re-proportioning could have fixed: the pose is faithful, it is just the
+// wrong pose for someone out here to walk nowhere in particular.
+//
+// Bias the shoulders down and the stance in, about the body's own front-to-
+// back axis, after the mixer has posed everything. The swing in the clips
+// survives; only where it swings from moves.
+const POSE_BIAS = [['upperarm.l', -0.74], ['upperarm.r', 0.74], ['upperleg.l', -0.12], ['upperleg.r', 0.12]];
 
 function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -28,7 +51,17 @@ function wrapAngle(a) {
 }
 
 export function createCharacter(scene) {
-  return assets.character ? new BakedCharacter(scene) : new ProceduralCharacter(scene);
+  if (assets.character) {
+    try {
+      return new WandererCharacter(scene);
+    } catch (e) {
+      // The body is built against bones it expects by name. If a re-bake
+      // ever renames or drops one, say so and stand up the hand-posed body
+      // rather than leaving the player with no body at all.
+      console.warn('wanderer body failed, using the hand-posed one:', e.message, e.stack);
+    }
+  }
+  return new ProceduralCharacter(scene);
 }
 
 /**
@@ -45,46 +78,68 @@ function easeFacing(self, dt, p) {
   self.facing += wrapAngle(target - self.facing) * (1 - Math.exp(-dt * (hs > 0.55 ? 8 : 4)));
 }
 
-/* ======================================================== the baked body */
+/* ===================================================== the wanderer's body */
 
-class BakedCharacter {
+class WandererCharacter {
   constructor(scene) {
+    this.scene = scene;
     this.root = new THREE.Group();
     this.model = assets.character.scene;
     this.opacity = 1;
     this.facing = 0;
     this.state = 'loco';
     this._airT = 0;
-    this._mats = [];
-    this.headBone = null;
+    this._wasVisible = false;
 
-    // Normalise: feet on y=0, HEIGHT metres tall, whatever the export scale.
-    const box = new THREE.Box3().setFromObject(this.model);
-    const s = HEIGHT / Math.max(0.01, box.max.y - box.min.y);
-    this.model.scale.setScalar(s);
-    this.model.position.y = -box.min.y * s;
-    this.root.add(this.model);
+    // The rig arrives at its own scale and its own proportions; put every
+    // joint where it belongs on a 1.80 m adult and carry the clips across.
+    // Do this before anything reads a bone matrix.
+    this.model.position.set(0, 0, 0);
+    this.model.scale.setScalar(1);
+    this.model.quaternion.identity();
+    const fit = reproportion(this.model);
+    retargetClips(assets.character.clips, this.model, fit);
 
-    const seen = new Set();
+    // The source mesh is dropped on the floor here as well as at bake time,
+    // so this works against an un-stripped pack too.
+    const dead = [];
+    const bones = [];
     this.model.traverse((o) => {
-      if (o.isBone && !this.headBone && /head/i.test(o.name)) this.headBone = o;
-      if (!o.isMesh) return;
-      o.castShadow = true;
-      // Skinned bounds do not follow the pose; the body is one object and
-      // always near the camera, so culling it buys nothing and can pop.
-      o.frustumCulled = false;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of mats) {
-        if (seen.has(m)) continue;
-        seen.add(m);
-        // The atlas is painted in display colours; everything else in this
-        // world carries physical reflectances. Pull it down or the body
-        // glows against the landscape it lives in.
-        m.color.multiplyScalar(0.62);
-        injectAtmosphere(m, { key: 'charbody' });
-        this._mats.push(m);
-      }
+      if (o.isBone) bones.push(o);
+      else if (o.isMesh) dead.push(o);
     });
+    for (const o of dead) {
+      o.removeFromParent();
+      o.geometry.dispose();
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.dispose();
+    }
+    this.headBone = this.model.getObjectByName('head') || bones.find((b) => /^head/i.test(b.name)) || null;
+    const byName = new Map(bones.map((b) => [norm(b.name), b]));
+    this.bias = POSE_BIAS
+      .map(([n, angle]) => ({ bone: byName.get(norm(n)), angle, clean: new THREE.Quaternion(), has: false }))
+      .filter((b) => b.bone);
+
+    this.root.add(this.model);
+    this.root.updateMatrixWorld(true);
+
+    const skeleton = new THREE.Skeleton(bones);
+    this.material = makeSolidMaterial({ key: 'char', roughness: 0.9 });
+    this.material.transparent = true;
+    this.body = new THREE.SkinnedMesh(buildBody(skeleton), this.material);
+    this.body.castShadow = true;
+    // Skinned bounds do not follow the pose; the body is one object and
+    // always near the camera, so culling it buys nothing and can pop.
+    this.body.frustumCulled = false;
+    this.root.add(this.body);
+    // Bound at the origin, so the bind matrix is identity and the group is
+    // free to be moved and turned underneath it.
+    this.body.bind(skeleton, new THREE.Matrix4());
+
+    // The cloak is simulated in world space - that is where its inertia
+    // lives - so it hangs off the scene, not off the group that moves.
+    this.chestBone = this.model.getObjectByName('chest') || this.headBone;
+    this.cloak = new Cloak(this.chestBone);
+    scene.add(this.cloak.mesh);
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.actions = {};
@@ -112,16 +167,21 @@ class BakedCharacter {
   setOpacity(o) {
     this.opacity = o;
     this.root.visible = o > 0.015;
-    for (const m of this._mats) {
-      m.opacity = o;
-      // Only actually transparent while fading: a permanently transparent
-      // skinned mesh sorts against itself and the cape shimmers.
-      m.transparent = o < 0.995;
-    }
+    this.material.opacity = o;
+    // Only actually transparent while fading: a permanently transparent
+    // skinned mesh sorts against itself and the cloak shimmers.
+    this.material.transparent = o < 0.995;
+    this.cloak.setOpacity(o);
   }
 
   update(dt, p) {
-    if (!this.root.visible && p.rig && p.rig.blend > 0.999) return;
+    if (!this.root.visible && p.rig && p.rig.blend > 0.999) {
+      // Inside the head: nothing to pose, and nothing to simulate. The cloth
+      // is re-hung on the way back out rather than left to catch up from
+      // wherever it was when the camera went in.
+      this._wasVisible = false;
+      return;
+    }
     easeFacing(this, dt, p);
     this.root.position.copy(p.position);
     this.root.rotation.y = this.facing + Math.PI;
@@ -168,6 +228,7 @@ class BakedCharacter {
     // rewrite the head bone each frame - and adding an offset onto a bone
     // nothing resets winds the head round and round on the body.
     if (this.headBone && this._headHasClean) this.headBone.quaternion.copy(this._headClean);
+    for (const b of this.bias) if (b.has) b.bone.quaternion.copy(b.clean);
 
     this.mixer.update(dt);
 
@@ -182,13 +243,52 @@ class BakedCharacter {
       E_LOOK.set(this._lookPitch, this._lookYaw, 0, 'YXZ');
       this.headBone.quaternion.multiply(Q_LOOK.setFromEuler(E_LOOK));
     }
+
+    /* --- the cloak ---------------------------------------------------- */
+
+    // The bones have only just been posed and the group has only just been
+    // moved; the renderer will not flush either until after this. Do it here
+    // or the cloth hangs off where the shoulders were last frame, which at
+    // running speed is most of a metre.
+    this.root.updateMatrixWorld(true);
+
+    // Shoulders and hips, biased in the body's own frame. Conjugating by the
+    // parent's rotation is what makes "down" mean down rather than down the
+    // arm, whatever the chest happens to be doing at the time.
+    this.root.getWorldQuaternion(Q_ROOT).invert();
+    for (const b of this.bias) {
+      b.bone.parent.getWorldQuaternion(Q_PAR).premultiply(Q_ROOT);
+      Q_INV.copy(Q_PAR).invert();
+      Q_AX.setFromAxisAngle(AXIS_Z, b.angle);
+      b.clean.copy(b.bone.quaternion);
+      b.has = true;
+      b.bone.quaternion.premultiply(Q_PAR).premultiply(Q_AX).premultiply(Q_INV);
+      b.bone.updateMatrixWorld(true);
+    }
+    const w = p.world && p.world.weather;
+    CLOAK_CTX.chest = this.chestBone;
+    CLOAK_CTX.feetY = p.position.y;
+    CLOAK_CTX.bodyX = p.position.x;
+    CLOAK_CTX.bodyZ = p.position.z;
+    CLOAK_CTX.facing = this.facing + Math.PI;
+    CLOAK_CTX.wind.x = w ? w.windDir.x : 0;
+    CLOAK_CTX.wind.z = w ? w.windDir.y : 0;
+    CLOAK_CTX.wind.strength = w ? w.wind : 0;
+    if (!this._wasVisible) this.cloak.reseed(this.chestBone);
+    this._wasVisible = true;
+    this.cloak.update(dt, CLOAK_CTX);
   }
 
   dispose() {
     this.root.removeFromParent();
     this.mixer.stopAllAction();
+    this.body.geometry.dispose();
+    this.material.dispose();
+    this.cloak.dispose();
   }
 }
+
+const CLOAK_CTX = { chest: null, feetY: 0, bodyX: 0, bodyZ: 0, facing: 0, wind: { x: 0, z: 0, strength: 0 } };
 
 /* =============================================== the procedural fallback */
 

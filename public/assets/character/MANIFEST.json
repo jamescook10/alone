@@ -3,6 +3,7 @@
   "source": "KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0",
   "commit": "672074b73ba276876a19e8816ecdc5241817ab47",
   "license": "CC0",
+  "contains": "skeleton + clips only; mesh and texture discarded",
   "clips": [
     "Idle",
     "Jump_Idle",
