@@ -81,8 +81,15 @@ export class Weather {
     this.cloudCover = 0.35;
     this.cloudDark = 0.0;
     this.overcast = 0.0;
+    // rain/snow are what is falling *on you*; frontRain/frontSnow are what the
+    // weather system is doing across the region. The two differ by whatever
+    // happens to be overhead - see the cloud gate in update().
     this.rain = 0;
     this.snow = 0;
+    this.frontRain = 0;
+    this.frontSnow = 0;
+    this.underCloud = 1;
+    this.cloudBase = Infinity;
     this.wind = 0.35;
     this.windAngle = 0.8;
     this.windDir = new THREE.Vector2(1, 0.2).normalize();
@@ -169,8 +176,8 @@ export class Weather {
     this._forced = kind;
     this._forcedT = 0;
     if (instant && (kind === 'clear' || kind === 'cloudy' || kind === 'fog')) {
-      this.rain = 0;
-      this.snow = 0;
+      this.rain = this.frontRain = 0;
+      this.snow = this.frontSnow = 0;
     }
   }
 
@@ -206,10 +213,27 @@ export class Weather {
 
     const wantPrecip = saturate((stormy - 0.18) / 0.5) * saturate(localMoist * 1.6);
     const freezing = smoothstep(2.5, -1.5, localTemp);
-    const targetRain = wantPrecip * (1 - freezing);
-    const targetSnow = wantPrecip * freezing;
-    this.rain = lerp(this.rain, targetRain, 1 - Math.exp(-dt * 0.22));
-    this.snow = lerp(this.snow, targetSnow, 1 - Math.exp(-dt * 0.18));
+    this.frontRain = lerp(this.frontRain, wantPrecip * (1 - freezing), 1 - Math.exp(-dt * 0.22));
+    this.frontSnow = lerp(this.frontSnow, wantPrecip * freezing, 1 - Math.exp(-dt * 0.18));
+
+    // Precipitation has to fall out of something. The front decides whether
+    // the region is wet; the cloud field decides whether it is wet *here* -
+    // under a cluster yes, under a gap in the same front no, and above the
+    // deck never, which is what used to leave the aeroplane flying through
+    // rain in clear air 2 km up. Faster than the front's own drift so a shaft
+    // arrives and leaves as you walk under its edge, slow enough that it
+    // fades rather than switches.
+    let gate = 1;
+    if (player && this.world.clouds) {
+      const above = this.world.clouds.sampleAt(player.position.x, player.position.z);
+      this.cloudBase = above.base;
+      gate = Number.isFinite(above.base)
+        ? above.cover * smoothstep(above.base, above.base - 90, player.position.y)
+        : 0;
+    }
+    this.underCloud = lerp(this.underCloud, gate, 1 - Math.exp(-dt * 0.8));
+    this.rain = this.frontRain * this.underCloud;
+    this.snow = this.frontSnow * this.underCloud;
 
     this.windAngle += (this.n.noise2(T * 0.006, 3.3)) * dt * 0.22;
     const gust = 0.6 + 0.4 * (this.n.noise2(T * 0.35, 91.2) * 0.5 + 0.5);
@@ -255,9 +279,12 @@ export class Weather {
     }
 
     /* --- accumulation --------------------------------------------------- */
+    // Wet ground and lying snow are one number for the whole world, so they
+    // follow the front rather than the shaft: the showers have been over this
+    // country all morning even if there is blue sky directly above you now.
     const exposed = 1 - this.shelter;
-    this.wetness = saturate(this.wetness + (this.rain * exposed * 0.06 - 0.012) * dt);
-    this.snowCover = saturate(this.snowCover + (this.snow * 0.03 - (localTemp > 1 ? 0.02 : 0)) * dt);
+    this.wetness = saturate(this.wetness + (this.frontRain * exposed * 0.06 - 0.012) * dt);
+    this.snowCover = saturate(this.snowCover + (this.frontSnow * 0.03 - (localTemp > 1 ? 0.02 : 0)) * dt);
 
     /* --- shared uniforms ------------------------------------------------ */
     atmo.uWind.value.copy(this.windDir);
