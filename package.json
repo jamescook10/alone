@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "tour": "node scripts/tour.mjs",
+    "survey": "node scripts/survey.mjs",
+    "postcards": "node scripts/postcards.mjs"
   },
   "devDependencies": {
     "@dgreenheck/ez-tree": "^1.1.0",

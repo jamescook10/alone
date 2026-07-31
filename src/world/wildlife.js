@@ -14,46 +14,166 @@ import { BIOME } from './worldgen.js';
 
 const GAIT = { WALK: 0, FLY: 1, SWIM: 2, HOP: 3 };
 
+// Who lives where.
+//
+// `biomes` is the whole point of this table: an Icelandic hillside holds sheep,
+// reindeer and gulls, and an African one holds elephants, zebra and vultures,
+// and neither ever holds the other. null means "anywhere it can stand".
+//
+// `cap` is the instance pool size and therefore the draw budget - one instanced
+// mesh per species, drawn only when it holds anything.
+const B = BIOME;
 const SPECIES = [
-  { key: 'deer', name: 'deer', gait: GAIT.WALK, size: 1.0, speed: 4.2, flee: 26, herd: 5, cap: 26,
+  /* --- temperate ------------------------------------------------------- */
+  { key: 'deer', name: 'deer', gait: GAIT.WALK, size: 1.0, speed: 4.2, flee: 26, herd: 5, cap: 22,
     body: [0.30, 0.34, 0.78], legs: 0.78, neck: 0.55, col: [0.20, 0.115, 0.062], antlers: true,
-    biomes: [BIOME.FOREST, BIOME.MEADOW, BIOME.GRASSLAND, BIOME.TAIGA], call: 'deer', voice: 0.006 },
-  { key: 'rabbit', name: 'rabbit', gait: GAIT.HOP, size: 0.34, speed: 5.4, flee: 13, herd: 3, cap: 28,
+    biomes: [B.FOREST, B.MEADOW, B.GRASSLAND, B.TAIGA, B.PRAIRIE, B.CROPLAND], call: 'deer', voice: 0.006 },
+  { key: 'rabbit', name: 'rabbit', gait: GAIT.HOP, size: 0.34, speed: 5.4, flee: 13, herd: 3, cap: 24,
     body: [0.14, 0.14, 0.26], legs: 0.16, neck: 0.10, col: [0.20, 0.17, 0.135], ears: true,
-    biomes: [BIOME.MEADOW, BIOME.GRASSLAND, BIOME.FOREST, BIOME.TUNDRA], call: null, voice: 0 },
-  { key: 'boar', name: 'boar', gait: GAIT.WALK, size: 0.8, speed: 4.6, flee: 12, herd: 4, cap: 16,
+    biomes: [B.MEADOW, B.GRASSLAND, B.FOREST, B.TUNDRA, B.PRAIRIE, B.MOOR, B.CROPLAND, B.SHRUBLAND], call: null, voice: 0 },
+  { key: 'boar', name: 'boar', gait: GAIT.WALK, size: 0.8, speed: 4.6, flee: 12, herd: 4, cap: 14,
     body: [0.32, 0.34, 0.66], legs: 0.38, neck: 0.26, col: [0.10, 0.082, 0.070], tusks: true,
-    biomes: [BIOME.FOREST, BIOME.RAINFOREST, BIOME.SWAMP], call: 'boar', voice: 0.01 },
-  { key: 'wolf', name: 'wolf', gait: GAIT.WALK, size: 0.75, speed: 5.6, flee: 0, herd: 4, cap: 12,
+    biomes: [B.FOREST, B.RAINFOREST, B.SWAMP, B.DRY_FOREST, B.MARSH], call: 'boar', voice: 0.01 },
+  { key: 'wolf', name: 'wolf', gait: GAIT.WALK, size: 0.75, speed: 5.6, flee: 0, herd: 4, cap: 10,
     body: [0.24, 0.26, 0.72], legs: 0.52, neck: 0.30, col: [0.145, 0.140, 0.135], curious: true,
-    biomes: [BIOME.TAIGA, BIOME.FOREST, BIOME.TUNDRA, BIOME.SNOW], call: 'wolf', voice: 0.004 },
-  { key: 'fox', name: 'fox', gait: GAIT.WALK, size: 0.45, speed: 5.0, flee: 16, herd: 1, cap: 12,
+    biomes: [B.TAIGA, B.FOREST, B.TUNDRA, B.SNOW, B.STEPPE, B.MOOR], call: 'wolf', voice: 0.004 },
+  { key: 'fox', name: 'fox', gait: GAIT.WALK, size: 0.45, speed: 5.0, flee: 16, herd: 1, cap: 10,
     body: [0.15, 0.16, 0.44], legs: 0.28, neck: 0.18, col: [0.34, 0.115, 0.035], bushyTail: true,
-    biomes: [BIOME.FOREST, BIOME.MEADOW, BIOME.TAIGA, BIOME.GRASSLAND], call: 'fox', voice: 0.004, night: true },
-  { key: 'goat', name: 'mountain goat', gait: GAIT.WALK, size: 0.7, speed: 3.6, flee: 18, herd: 4, cap: 14,
+    biomes: [B.FOREST, B.MEADOW, B.TAIGA, B.GRASSLAND, B.MOOR, B.CROPLAND, B.URBAN], call: 'fox', voice: 0.004, night: true },
+  { key: 'horse', name: 'wild horses', gait: GAIT.WALK, size: 1.25, speed: 7.4, flee: 30, herd: 6, cap: 16,
+    body: [0.32, 0.42, 0.92], legs: 0.92, neck: 0.66, col: [0.24, 0.15, 0.085], mane: true,
+    biomes: [B.PRAIRIE, B.STEPPE, B.GRASSLAND, B.MEADOW], call: 'horse', voice: 0.005 },
+  { key: 'sheep', name: 'sheep', gait: GAIT.WALK, size: 0.62, speed: 3.2, flee: 15, herd: 7, cap: 20,
+    body: [0.26, 0.30, 0.52], legs: 0.34, neck: 0.20, col: [0.52, 0.50, 0.46], fleece: true, horns: true,
+    biomes: [B.MOOR, B.MEADOW, B.GRASSLAND, B.CROPLAND, B.TUNDRA, B.SHRUBLAND], call: 'sheep', voice: 0.012 },
+  { key: 'badger', name: 'badger', gait: GAIT.WALK, size: 0.4, speed: 3.4, flee: 12, herd: 1, cap: 8,
+    body: [0.17, 0.15, 0.38], legs: 0.14, neck: 0.12, col: [0.13, 0.125, 0.12], stripe: true,
+    biomes: [B.FOREST, B.MEADOW, B.CROPLAND, B.SHRUBLAND], call: null, voice: 0, night: true },
+
+  /* --- boreal and polar -------------------------------------------------- */
+  { key: 'moose', name: 'moose', gait: GAIT.WALK, size: 1.5, speed: 4.4, flee: 22, herd: 2, cap: 8,
+    body: [0.40, 0.50, 1.00], legs: 1.10, neck: 0.50, col: [0.11, 0.075, 0.050], antlers: true, palmate: true,
+    biomes: [B.TAIGA, B.BOG, B.MARSH, B.FOREST], call: 'moose', voice: 0.004 },
+  { key: 'reindeer', name: 'reindeer', gait: GAIT.WALK, size: 0.95, speed: 5.0, flee: 24, herd: 9, cap: 26,
+    body: [0.30, 0.34, 0.74], legs: 0.72, neck: 0.48, col: [0.34, 0.30, 0.26], antlers: true,
+    biomes: [B.TUNDRA, B.TAIGA, B.SNOW, B.MOOR, B.POLAR_DESERT], call: 'deer', voice: 0.005 },
+  { key: 'bear', name: 'bear', gait: GAIT.WALK, size: 1.15, speed: 5.2, flee: 0, herd: 1, cap: 5,
+    body: [0.40, 0.44, 0.86], legs: 0.46, neck: 0.28, col: [0.115, 0.085, 0.062], curious: true,
+    biomes: [B.TAIGA, B.FOREST, B.ALPINE], call: 'bear', voice: 0.003 },
+  { key: 'polarbear', name: 'polar bear', gait: GAIT.WALK, size: 1.25, speed: 5.4, flee: 0, herd: 1, cap: 4,
+    body: [0.42, 0.44, 0.94], legs: 0.52, neck: 0.34, col: [0.72, 0.72, 0.70], curious: true,
+    biomes: [B.GLACIER, B.SNOW, B.POLAR_DESERT], call: 'bear', voice: 0.003 },
+  { key: 'arcticfox', name: 'arctic fox', gait: GAIT.WALK, size: 0.4, speed: 5.0, flee: 15, herd: 1, cap: 8,
+    body: [0.15, 0.16, 0.40], legs: 0.24, neck: 0.16, col: [0.74, 0.75, 0.78], bushyTail: true,
+    biomes: [B.SNOW, B.TUNDRA, B.GLACIER, B.POLAR_DESERT], call: 'fox', voice: 0.004 },
+  { key: 'penguin', name: 'penguins', gait: GAIT.WALK, size: 0.5, speed: 1.7, flee: 10, herd: 12, cap: 28,
+    body: [0.16, 0.24, 0.20], legs: 0.16, neck: 0.16, col: [0.06, 0.065, 0.075], upright: true, belly: [0.86, 0.86, 0.84],
+    biomes: [B.GLACIER, B.SNOW, B.BLACK_SAND, B.POLAR_DESERT], call: 'penguin', voice: 0.02 },
+  { key: 'seal', name: 'seal', gait: GAIT.WALK, size: 0.8, speed: 1.4, flee: 12, herd: 4, cap: 10,
+    body: [0.26, 0.28, 0.72], legs: 0.06, neck: 0.22, col: [0.26, 0.25, 0.24], flippers: true,
+    biomes: [B.BEACH, B.BLACK_SAND, B.GLACIER, B.SNOW], call: 'seal', voice: 0.01 },
+
+  /* --- mountain ----------------------------------------------------------- */
+  { key: 'goat', name: 'mountain goat', gait: GAIT.WALK, size: 0.7, speed: 3.6, flee: 18, herd: 4, cap: 12,
     body: [0.24, 0.28, 0.56], legs: 0.46, neck: 0.26, col: [0.36, 0.345, 0.315], horns: true,
-    biomes: [BIOME.ALPINE, BIOME.SCREE, BIOME.TUNDRA], call: 'goat', voice: 0.008 },
+    biomes: [B.ALPINE, B.SCREE, B.TUNDRA, B.MOOR], call: 'goat', voice: 0.008 },
+  { key: 'yak', name: 'yak', gait: GAIT.WALK, size: 1.2, speed: 3.0, flee: 18, herd: 4, cap: 8,
+    body: [0.40, 0.44, 0.86], legs: 0.52, neck: 0.26, col: [0.085, 0.075, 0.070], horns: true, fleece: true,
+    biomes: [B.ALPINE, B.STEPPE, B.SCREE], call: 'yak', voice: 0.006 },
+
+  /* --- hot and dry --------------------------------------------------------- */
   { key: 'camel', name: 'camel', gait: GAIT.WALK, size: 1.1, speed: 3.4, flee: 14, herd: 3, cap: 8,
     body: [0.34, 0.44, 0.84], legs: 0.95, neck: 0.85, col: [0.28, 0.205, 0.115], hump: true,
-    biomes: [BIOME.DESERT, BIOME.SAVANNA], call: null, voice: 0 },
-  { key: 'bird', name: 'birds', gait: GAIT.FLY, size: 0.22, speed: 9.5, flee: 22, herd: 14, cap: 90,
+    biomes: [B.DESERT, B.DUNES, B.ROCKY_DESERT, B.SALT_FLAT, B.OASIS], call: 'camel', voice: 0.005 },
+  { key: 'gazelle', name: 'gazelle', gait: GAIT.WALK, size: 0.6, speed: 8.4, flee: 34, herd: 8, cap: 26,
+    body: [0.20, 0.24, 0.56], legs: 0.60, neck: 0.42, col: [0.42, 0.28, 0.13], horns: true, belly: [0.86, 0.84, 0.78],
+    biomes: [B.SAVANNA, B.STEPPE, B.DRY_FOREST, B.ROCKY_DESERT], call: null, voice: 0 },
+  { key: 'zebra', name: 'zebra', gait: GAIT.WALK, size: 0.95, speed: 6.6, flee: 28, herd: 7, cap: 18,
+    body: [0.30, 0.38, 0.82], legs: 0.78, neck: 0.58, col: [0.68, 0.66, 0.62], mane: true, stripe: true,
+    biomes: [B.SAVANNA, B.DRY_FOREST, B.STEPPE], call: 'horse', voice: 0.005 },
+  { key: 'elephant', name: 'elephant', gait: GAIT.WALK, size: 2.2, speed: 3.4, flee: 20, herd: 4, cap: 6,
+    body: [0.60, 0.72, 1.30], legs: 1.30, neck: 0.34, col: [0.30, 0.30, 0.31], trunk: true, bigEars: true, tusks: true,
+    biomes: [B.SAVANNA, B.DRY_FOREST, B.RAINFOREST, B.OASIS], call: 'elephant', voice: 0.004 },
+  { key: 'giraffe', name: 'giraffe', gait: GAIT.WALK, size: 1.9, speed: 4.6, flee: 26, herd: 3, cap: 6,
+    body: [0.34, 0.46, 0.86], legs: 2.10, neck: 2.30, col: [0.56, 0.38, 0.16], horns: true, patch: true,
+    biomes: [B.SAVANNA, B.DRY_FOREST], call: null, voice: 0 },
+  { key: 'lion', name: 'lion', gait: GAIT.WALK, size: 0.95, speed: 6.4, flee: 0, herd: 3, cap: 6,
+    body: [0.30, 0.32, 0.84], legs: 0.56, neck: 0.30, col: [0.42, 0.30, 0.14], mane: true, curious: true,
+    biomes: [B.SAVANNA, B.DRY_FOREST, B.STEPPE], call: 'lion', voice: 0.004 },
+  { key: 'ostrich', name: 'ostrich', gait: GAIT.WALK, size: 1.1, speed: 8.0, flee: 30, herd: 3, cap: 8,
+    body: [0.24, 0.34, 0.50], legs: 1.20, neck: 0.90, col: [0.10, 0.095, 0.090], upright: true,
+    biomes: [B.SAVANNA, B.STEPPE, B.ROCKY_DESERT, B.DESERT], call: null, voice: 0 },
+  { key: 'buffalo', name: 'buffalo', gait: GAIT.WALK, size: 1.2, speed: 5.0, flee: 18, herd: 8, cap: 18,
+    body: [0.42, 0.46, 0.92], legs: 0.60, neck: 0.24, col: [0.10, 0.088, 0.080], horns: true,
+    biomes: [B.SAVANNA, B.PRAIRIE, B.STEPPE, B.GRASSLAND], call: 'buffalo', voice: 0.005 },
+
+  /* --- tropical forest and wetland ------------------------------------------ */
+  { key: 'monkey', name: 'monkeys', gait: GAIT.WALK, size: 0.36, speed: 5.2, flee: 18, herd: 6, cap: 18,
+    body: [0.14, 0.16, 0.34], legs: 0.24, neck: 0.14, col: [0.24, 0.17, 0.10], longTail: true,
+    biomes: [B.RAINFOREST, B.CLOUD_FOREST, B.BAMBOO, B.KARST, B.MANGROVE], call: 'monkey', voice: 0.03 },
+  { key: 'tapir', name: 'tapir', gait: GAIT.WALK, size: 0.85, speed: 4.0, flee: 16, herd: 2, cap: 8,
+    body: [0.32, 0.36, 0.72], legs: 0.40, neck: 0.22, col: [0.13, 0.12, 0.115], snout: true,
+    biomes: [B.RAINFOREST, B.CLOUD_FOREST, B.SWAMP], call: null, voice: 0 },
+  { key: 'crocodile', name: 'crocodile', gait: GAIT.WALK, size: 0.9, speed: 2.4, flee: 0, herd: 1, cap: 8,
+    body: [0.26, 0.16, 0.92], legs: 0.14, neck: 0.20, col: [0.13, 0.15, 0.10], longTail: true, curious: true,
+    biomes: [B.SWAMP, B.MANGROVE, B.MARSH, B.OASIS], call: null, voice: 0 },
+  { key: 'hippo', name: 'hippo', gait: GAIT.WALK, size: 1.4, speed: 3.0, flee: 14, herd: 3, cap: 6,
+    body: [0.50, 0.44, 0.90], legs: 0.32, neck: 0.20, col: [0.24, 0.16, 0.15], snout: true,
+    biomes: [B.SWAMP, B.MARSH, B.OASIS], call: 'hippo', voice: 0.006 },
+  { key: 'kangaroo', name: 'kangaroos', gait: GAIT.HOP, size: 0.85, speed: 7.0, flee: 24, herd: 5, cap: 14,
+    body: [0.22, 0.30, 0.50], legs: 0.62, neck: 0.28, col: [0.34, 0.24, 0.14], upright: true, longTail: true,
+    biomes: [B.DRY_FOREST, B.SHRUBLAND, B.SAVANNA, B.STEPPE], call: null, voice: 0 },
+
+  /* --- birds ---------------------------------------------------------------- */
+  { key: 'bird', name: 'birds', gait: GAIT.FLY, size: 0.22, speed: 9.5, flee: 22, herd: 14, cap: 70,
     body: [0.07, 0.07, 0.20], legs: 0, neck: 0.05, col: [0.09, 0.085, 0.080], wings: 0.30,
     biomes: null, call: 'songbird', voice: 0.05 },
-  { key: 'gull', name: 'gulls', gait: GAIT.FLY, size: 0.32, speed: 8.5, flee: 16, herd: 7, cap: 40,
+  { key: 'gull', name: 'gulls', gait: GAIT.FLY, size: 0.32, speed: 8.5, flee: 16, herd: 7, cap: 34,
     body: [0.09, 0.09, 0.26], legs: 0, neck: 0.07, col: [0.62, 0.63, 0.66], wings: 0.46,
-    biomes: [BIOME.BEACH, BIOME.OCEAN, BIOME.REEF], call: 'gull', voice: 0.035 },
-  { key: 'raptor', name: 'eagle', gait: GAIT.FLY, size: 0.55, speed: 12, flee: 0, herd: 1, cap: 6,
+    biomes: [B.BEACH, B.OCEAN, B.REEF, B.KELP, B.BLACK_SAND], call: 'gull', voice: 0.035 },
+  { key: 'raptor', name: 'eagle', gait: GAIT.FLY, size: 0.55, speed: 12, flee: 0, herd: 1, cap: 5,
     body: [0.12, 0.13, 0.42], legs: 0, neck: 0.10, col: [0.115, 0.085, 0.055], wings: 0.95,
-    biomes: [BIOME.ALPINE, BIOME.SCREE, BIOME.SNOW, BIOME.FOREST], call: 'eagle', voice: 0.010 },
-  { key: 'fish', name: 'fish', gait: GAIT.SWIM, size: 0.30, speed: 3.4, flee: 7, herd: 18, cap: 110,
+    biomes: [B.ALPINE, B.SCREE, B.SNOW, B.FOREST, B.MOOR, B.TAIGA], call: 'eagle', voice: 0.010 },
+  { key: 'vulture', name: 'vultures', gait: GAIT.FLY, size: 0.55, speed: 9, flee: 0, herd: 3, cap: 8,
+    body: [0.12, 0.14, 0.40], legs: 0, neck: 0.14, col: [0.15, 0.12, 0.10], wings: 1.05,
+    biomes: [B.SAVANNA, B.DESERT, B.ROCKY_DESERT, B.BADLANDS, B.DUNES, B.STEPPE], call: 'vulture', voice: 0.006 },
+  { key: 'parrot', name: 'parrots', gait: GAIT.FLY, size: 0.26, speed: 8.5, flee: 20, herd: 8, cap: 30,
+    body: [0.08, 0.08, 0.22], legs: 0, neck: 0.06, col: [0.55, 0.14, 0.10], wings: 0.34, longTail: true,
+    biomes: [B.RAINFOREST, B.CLOUD_FOREST, B.BAMBOO, B.KARST, B.MANGROVE], call: 'parrot', voice: 0.045 },
+  { key: 'flamingo', name: 'flamingos', gait: GAIT.FLY, size: 0.5, speed: 7, flee: 22, herd: 10, cap: 24,
+    body: [0.09, 0.11, 0.26], legs: 0, neck: 0.30, col: [0.86, 0.42, 0.44], wings: 0.52,
+    biomes: [B.SALT_FLAT, B.MARSH, B.OASIS, B.MANGROVE], call: 'gull', voice: 0.02 },
+  { key: 'heron', name: 'heron', gait: GAIT.FLY, size: 0.5, speed: 6.5, flee: 20, herd: 1, cap: 8,
+    body: [0.08, 0.10, 0.28], legs: 0, neck: 0.28, col: [0.44, 0.46, 0.50], wings: 0.60,
+    biomes: [B.MARSH, B.BOG, B.SWAMP, B.MANGROVE, B.OASIS], call: 'heron', voice: 0.012 },
+  { key: 'crow', name: 'crows', gait: GAIT.FLY, size: 0.28, speed: 8, flee: 18, herd: 6, cap: 26,
+    body: [0.08, 0.08, 0.24], legs: 0, neck: 0.06, col: [0.045, 0.045, 0.055], wings: 0.40,
+    biomes: [B.URBAN, B.CROPLAND, B.GRASSLAND, B.MOOR, B.BADLANDS, B.STEPPE], call: 'crow', voice: 0.03 },
+
+  /* --- water ---------------------------------------------------------------- */
+  { key: 'fish', name: 'fish', gait: GAIT.SWIM, size: 0.30, speed: 3.4, flee: 7, herd: 18, cap: 90,
     body: [0.075, 0.11, 0.26], legs: 0, neck: 0, col: [0.135, 0.170, 0.190], fins: true,
     biomes: null, call: null, voice: 0 },
   { key: 'whale', name: 'whale', gait: GAIT.SWIM, size: 7.5, speed: 2.6, flee: 0, herd: 2, cap: 3,
     body: [1.3, 1.5, 5.4], legs: 0, neck: 0, col: [0.055, 0.060, 0.072], fins: true, deep: true,
     biomes: null, call: 'whale', voice: 0.003 },
-  { key: 'butterfly', name: 'butterflies', gait: GAIT.FLY, size: 0.10, speed: 2.0, flee: 4, herd: 8, cap: 60,
+  { key: 'dolphin', name: 'dolphins', gait: GAIT.SWIM, size: 1.6, speed: 6.5, flee: 0, herd: 5, cap: 12,
+    body: [0.30, 0.34, 1.20], legs: 0, neck: 0, col: [0.20, 0.22, 0.25], fins: true, midwater: true,
+    biomes: null, call: 'dolphin', voice: 0.01 },
+  { key: 'shark', name: 'shark', gait: GAIT.SWIM, size: 1.8, speed: 4.6, flee: 0, herd: 1, cap: 5,
+    body: [0.24, 0.32, 1.30], legs: 0, neck: 0, col: [0.16, 0.17, 0.18], fins: true, midwater: true,
+    biomes: null, call: null, voice: 0 },
+  { key: 'turtle', name: 'sea turtle', gait: GAIT.SWIM, size: 0.9, speed: 1.8, flee: 8, herd: 2, cap: 8,
+    body: [0.34, 0.16, 0.50], legs: 0, neck: 0.14, col: [0.22, 0.26, 0.18], shell: true, fins: true,
+    biomes: null, call: null, voice: 0 },
+
+  /* --- insects --------------------------------------------------------------- */
+  { key: 'butterfly', name: 'butterflies', gait: GAIT.FLY, size: 0.10, speed: 2.0, flee: 4, herd: 8, cap: 44,
     body: [0.02, 0.02, 0.05], legs: 0, neck: 0, col: [1.4, 1.0, 0.35], wings: 0.16,
-    biomes: [BIOME.MEADOW, BIOME.GRASSLAND, BIOME.RAINFOREST, BIOME.SWAMP], call: null, voice: 0 },
+    biomes: [B.MEADOW, B.GRASSLAND, B.RAINFOREST, B.SWAMP, B.PRAIRIE, B.CROPLAND, B.OASIS, B.CLOUD_FOREST], call: null, voice: 0 },
+  { key: 'dragonfly', name: 'dragonflies', gait: GAIT.FLY, size: 0.13, speed: 3.4, flee: 5, herd: 6, cap: 30,
+    body: [0.02, 0.02, 0.09], legs: 0, neck: 0, col: [0.30, 1.1, 0.9], wings: 0.14,
+    biomes: [B.MARSH, B.BOG, B.SWAMP, B.MANGROVE, B.OASIS], call: null, voice: 0 },
 ];
 
 /* ------------------------------------------------------------- the system */
@@ -161,6 +281,24 @@ export class Wildlife {
       return { sp, mesh, phase, motion, animals: [] };
     });
 
+    // Which species could live in each biome, worked out once. The spawner
+    // samples the ground first and then picks from that list, which is what
+    // makes a savanna hold zebra and a fjord hold seals instead of both
+    // holding whatever the random number generator reached for.
+    this.byBiome = new Map();
+    this.anywhere = [];
+    for (const pool of this.pools) {
+      if (!pool.sp.biomes) {
+        this.anywhere.push(pool);
+        continue;
+      }
+      for (const b of pool.sp.biomes) {
+        let list = this.byBiome.get(b);
+        if (!list) this.byBiome.set(b, (list = []));
+        list.push(pool);
+      }
+    }
+
     this.animals = [];
     this.spawnTimer = 0;
     this._m4 = new THREE.Matrix4();
@@ -198,6 +336,7 @@ export class Wildlife {
       if (s.waterLevel === -Infinity) return false;
       const depth = s.waterLevel - s.height;
       if (sp.deep) return depth > 55;
+      if (sp.midwater) return depth > 8;
       return depth > 1.4;
     }
     if (s.waterLevel > s.height + 0.2) return sp.gait === GAIT.FLY && sp.key === 'gull';
@@ -213,14 +352,21 @@ export class Wildlife {
     const w = this.world;
     const rng = this.rng;
     for (let attempt = 0; attempt < budget; attempt++) {
-      const pool = this.pools[rng.int(0, this.pools.length)];
-      const sp = pool.sp;
-      if (pool.animals.length >= sp.cap) continue;
+      // Ground first, species second. With forty-odd species a uniform draw
+      // would spend nearly every attempt on something that cannot live here.
       const a = rng.float(0, Math.PI * 2);
       const r = lerp(48, 190, rng.next());
       const x = player.position.x + Math.cos(a) * r;
       const z = player.position.z + Math.sin(a) * r;
       const s = w.terrain.sampleAt(x, z);
+      const local = this.byBiome.get(s.biome);
+      const nLocal = local ? local.length : 0;
+      const total = nLocal + this.anywhere.length;
+      if (!total) continue;
+      const pick = rng.int(0, total);
+      const pool = pick < nLocal ? local[pick] : this.anywhere[pick - nLocal];
+      const sp = pool.sp;
+      if (pool.animals.length >= sp.cap) continue;
       if (!this._canLive(sp, s)) continue;
 
       // Nocturnal species keep to the dark, and the rest to the light.
@@ -245,7 +391,7 @@ export class Wildlife {
     const rng = this.rng;
     const gh = w.terrain.heightAt(x, z);
     let y = gh;
-    if (sp.gait === GAIT.FLY) y = gh + lerp(6, 46, rng.next()) * (sp.key === 'butterfly' ? 0.06 : 1);
+    if (sp.gait === GAIT.FLY) y = gh + lerp(6, 46, rng.next()) * (sp.size < 0.16 ? 0.06 : 1);
     if (sp.gait === GAIT.SWIM) {
       const wl = w.terrain.waterAt(x, z);
       if (wl === -Infinity) return;
@@ -402,8 +548,8 @@ export class Wildlife {
 
       if (sp.gait === GAIT.FLY) {
         // Hold a comfortable altitude above whatever is below.
-        const want = gh + (sp.key === 'butterfly' ? 0.7 : sp.key === 'raptor' ? 65 : 16) +
-          Math.sin(a.wander * 0.8) * (sp.key === 'butterfly' ? 0.4 : 8);
+        const want = gh + (sp.size < 0.16 ? 0.7 : sp.key === 'raptor' || sp.key === 'vulture' ? 65 : 16) +
+          Math.sin(a.wander * 0.8) * (sp.size < 0.16 ? 0.4 : 8);
         a.vy += clamp((want - a.y) * 0.5, -6, 6) * dt * 1.4;
         a.vy *= Math.exp(-dt * 0.9);
         a.y += a.vy * dt;

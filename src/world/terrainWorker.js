@@ -5,7 +5,7 @@
 // that grow or sit on that ground. All heavy sampling happens here so the
 // main thread never stalls while the world streams in.
 
-import { WorldGen, BIOME, BIOME_INFO, SEA_LEVEL } from './worldgen.js';
+import { WorldGen, BIOME, BIOME_INFO, SEA_LEVEL, SURFACE, speciesFor, SPECIES, s2l } from './worldgen.js';
 import { hash3i, hash3f, clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 
 let wg = null;
@@ -44,7 +44,12 @@ function build(req) {
   const gmoist = new Float32Array(gw * gw);
   const griver = new Float32Array(gw * gw);
   const groad = new Float32Array(gw * gw);
+  const gsurf = new Uint8Array(gw * gw);
   const gtown = new Float32Array(gw * gw);
+  const grail = new Float32Array(gw * gw);
+  const gfarm = new Float32Array(gw * gw);
+  const gsite = new Float32Array(gw * gw);
+  const gdune = new Float32Array(gw * gw);
   const s = {};
   let minY = Infinity;
   let maxY = -Infinity;
@@ -62,7 +67,12 @@ function build(req) {
       gmoist[k] = s.moisture;
       griver[k] = s.riverStrength;
       groad[k] = s.road;
+      gsurf[k] = s.roadSurface;
       gtown[k] = s.townInfluence;
+      grail[k] = s.rail;
+      gfarm[k] = s.farm;
+      gsite[k] = s.siteInfluence;
+      gdune[k] = s.dune;
     }
   }
 
@@ -103,7 +113,12 @@ function build(req) {
       normals[vi * 3 + 2] = nz * il;
 
       const slope = 1 - ny * il;
-      groundColor(wx, wz, h, gbiome[gi], gtemp[gi], gmoist[gi], slope, gwater[gi], griver[gi], groad[gi], gtown[gi], col, MATW);
+      GC.x = wx; GC.z = wz; GC.h = h; GC.biome = gbiome[gi];
+      GC.temp = gtemp[gi]; GC.moist = gmoist[gi]; GC.slope = slope;
+      GC.water = gwater[gi]; GC.river = griver[gi];
+      GC.road = groad[gi]; GC.surface = gsurf[gi]; GC.town = gtown[gi];
+      GC.rail = grail[gi]; GC.farm = gfarm[gi]; GC.dune = gdune[gi];
+      groundColor(GC, col, MATW);
       colors[vi * 3] = col[0];
       colors[vi * 3 + 1] = col[1];
       colors[vi * 3 + 2] = col[2];
@@ -194,7 +209,7 @@ function build(req) {
 
   // --- things that live on the ground -------------------------------------
   if (wantScatter) {
-    const sc = scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver);
+    const sc = scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver, grail, gsite, gfarm);
     payload.scatter = sc;
     for (const key of ['plants', 'rocks', 'grass']) {
       if (sc[key]) transfer.push(sc[key].buffer);
@@ -206,29 +221,46 @@ function build(req) {
 
 /* ------------------------------------------------------------ ground colour */
 
-const TMPC = [0, 0, 0];
 const MATW = [0, 0]; // sand, snow weights for the texture splat
+// One reused argument bag: this runs once per terrain vertex and a fourteen
+// argument call signature was already unreadable before the railways arrived.
+const GC = {
+  x: 0, z: 0, h: 0, biome: 0, temp: 0, moist: 0, slope: 0, water: 0,
+  river: 0, road: 0, surface: 0, town: 0, rail: 0, farm: 0, dune: 0,
+};
 
-// sRGB -> linear, because the palette below is authored as display colours
-// and the vertex colour attribute feeds the shader in linear space.
-function s2l(c) {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-}
-
-// Flat-look overlays, authored in sRGB pastels and converted once.
+// Flat-look overlays, authored in sRGB pastels and converted once. Biomes may
+// override the rock and the sand - red rock in badlands, black sand under a
+// volcano - via BIOME_INFO.
 const ROCK_COL = [s2l(0.60), s2l(0.58), s2l(0.65)]; // soft lilac-grey
 const SNOW_COL = [s2l(0.93), s2l(0.95), s2l(0.97)];
 const SAND_COL = [s2l(0.89), s2l(0.79), s2l(0.57)];
 const GRAVEL_COL = [s2l(0.64), s2l(0.60), s2l(0.58)];
 const PAVE_COL = [s2l(0.60), s2l(0.57), s2l(0.55)];
-const ROAD_COL = [s2l(0.38), s2l(0.38), s2l(0.41)];
+// Road surfaces. Which one you get is decided by the oracle from what the
+// settlements at each end could justify and what the country will carry, so a
+// dirt track through the jungle never turns into tarmac.
+const SURFACE_COL = [
+  null,
+  [s2l(0.52), s2l(0.42), s2l(0.30)], // dirt: pale rutted earth
+  [s2l(0.58), s2l(0.56), s2l(0.52)], // gravel: grey chippings
+  [s2l(0.34), s2l(0.34), s2l(0.37)], // tarmac
+];
+const BALLAST_COL = [s2l(0.46), s2l(0.44), s2l(0.42)];
+const FURROW_COL = [s2l(0.44), s2l(0.35), s2l(0.24)];
 
-function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road, town, out, matw) {
+function groundColor(c, out, matw) {
+  const { x, z, h, biome, temp, slope } = c;
+  const info = BIOME_INFO[biome];
+
   if (matw) {
-    matw[0] = (biome === BIOME.DESERT || biome === BIOME.BEACH) ? 1 - smoothstep(0.30, 0.60, slope) : 0;
+    // The sand splat is for anything that reads as loose grains.
+    matw[0] = (biome === BIOME.DESERT || biome === BIOME.DUNES || biome === BIOME.BEACH ||
+      biome === BIOME.SALT_FLAT || biome === BIOME.BLACK_SAND)
+      ? 1 - smoothstep(0.30, 0.60, slope) : 0;
     matw[1] = 0;
   }
-  const info = BIOME_INFO[biome];
+
   // Two-tone base quantised to three flat steps: large clean patches of
   // colour instead of continuous mottle - the flat-illustration look.
   const vRaw = hashNoise(x * 0.021, z * 0.021) * 0.5 + hashNoise(x * 0.0043, z * 0.0043) * 0.5;
@@ -237,17 +269,27 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
   let g = lerp(info.col[1], info.col2[1], v);
   let b = lerp(info.col[2], info.col2[2], v);
 
+  // Dune crests catch the light and their flanks fall into shadow, which is
+  // most of what makes a sand sea read as a sand sea from a distance.
+  if (c.dune > 0.02) {
+    const k = c.dune * 0.35 * (0.5 + hashNoise(x * 0.004, z * 0.0007));
+    r += k * 0.10; g += k * 0.085; b += k * 0.05;
+  }
+
   // Steep ground shows rock, over a narrow band so the edge stays clean.
+  const rockCol = info.rock || ROCK_COL;
   const rock = smoothstep(0.46, 0.60, slope);
   if (rock > 0) {
     const rv = 0.90 + hashNoise(x * 0.09, z * 0.09) * 0.2;
-    r = lerp(r, ROCK_COL[0] * rv, rock);
-    g = lerp(g, ROCK_COL[1] * rv, rock);
-    b = lerp(b, ROCK_COL[2] * rv, rock);
+    r = lerp(r, rockCol[0] * rv, rock);
+    g = lerp(g, rockCol[1] * rv, rock);
+    b = lerp(b, rockCol[2] * rv, rock);
   }
 
-  // Snow settles on cold, flat, high ground.
-  const snowLine = smoothstep(2.0, -4.0, temp);
+  // Snow settles on cold, flat, high ground. This is the same rule the shared
+  // atmosphere runs for trees, rocks and buildings, so a snowy hillside now
+  // carries snowy trees and snowy roofs instead of green ones.
+  const snowLine = smoothstep(4.0, -3.0, temp);
   const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope));
   if (matw) matw[1] = snow;
   if (snow > 0.01) {
@@ -257,14 +299,15 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
   }
 
   // Sand at the water's edge, silt under it.
-  if (waterLevel > -9999) {
-    const d = waterLevel - h;
+  if (c.water > -9999) {
+    const d = c.water - h;
     if (d > -1.6) {
+      const sandCol = info.sand || SAND_COL;
       const shore = smoothstep(0.25, 0.75, saturate(1 - Math.abs(d) / 2.2));
       if (matw) matw[0] = Math.max(matw[0], shore);
-      r = lerp(r, SAND_COL[0], shore * 0.8);
-      g = lerp(g, SAND_COL[1], shore * 0.8);
-      b = lerp(b, SAND_COL[2], shore * 0.8);
+      r = lerp(r, sandCol[0], shore * 0.8);
+      g = lerp(g, sandCol[1], shore * 0.8);
+      b = lerp(b, sandCol[2], shore * 0.8);
       // Everything underwater darkens with depth.
       const sub = saturate(d / 14);
       r = lerp(r, r * 0.40, sub);
@@ -274,20 +317,37 @@ function groundColor(x, z, h, biome, temp, moist, slope, waterLevel, river, road
   }
 
   // River beds are gravel.
-  if (river > 0.15) {
-    const k = smoothstep(0.15, 0.6, river) * 0.55;
+  if (c.river > 0.15) {
+    const k = smoothstep(0.15, 0.6, c.river) * 0.55;
     const gv = 0.9 + hashNoise(x * 0.3, z * 0.3) * 0.2;
     r = lerp(r, GRAVEL_COL[0] * gv, k); g = lerp(g, GRAVEL_COL[1] * gv, k); b = lerp(b, GRAVEL_COL[2] * gv, k);
   }
 
-  // Roads and town ground: paving, then asphalt.
-  if (town > 0.02) {
-    const k = smoothstep(0.02, 0.55, town) * 0.6;
+  // Ploughed ground outside a settlement: parallel furrows, angled off the
+  // compass so fields do not all line up with the chunk grid.
+  if (c.farm > 0.05) {
+    const fx = x * 0.9063 + z * 0.4226;
+    const stripe = 0.5 + 0.5 * Math.sin(fx * 0.42 + hashNoise(x * 0.004, z * 0.004) * 6.0);
+    const k = smoothstep(0.05, 0.45, c.farm) * (0.25 + stripe * 0.35);
+    r = lerp(r, FURROW_COL[0], k); g = lerp(g, FURROW_COL[1], k); b = lerp(b, FURROW_COL[2], k);
+  }
+
+  // Town ground is paved; a road on top of it is whatever people could lay.
+  if (c.town > 0.02) {
+    const k = smoothstep(0.02, 0.55, c.town) * 0.6;
     r = lerp(r, PAVE_COL[0], k); g = lerp(g, PAVE_COL[1], k); b = lerp(b, PAVE_COL[2], k);
   }
-  if (road > 0.02) {
-    const k = smoothstep(0.05, 0.5, road);
-    r = lerp(r, ROAD_COL[0], k); g = lerp(g, ROAD_COL[1], k); b = lerp(b, ROAD_COL[2], k);
+  if (c.rail > 0.02) {
+    const k = smoothstep(0.05, 0.5, c.rail) * 0.85;
+    const gv = 0.88 + hashNoise(x * 0.5, z * 0.5) * 0.24;
+    r = lerp(r, BALLAST_COL[0] * gv, k); g = lerp(g, BALLAST_COL[1] * gv, k); b = lerp(b, BALLAST_COL[2] * gv, k);
+  }
+  if (c.road > 0.02) {
+    const sc = SURFACE_COL[c.surface] || SURFACE_COL[1];
+    const k = smoothstep(0.05, 0.5, c.road) * (c.surface === SURFACE.TARMAC ? 1 : 0.82);
+    // An unsealed road is never one flat colour - it is ruts and dust.
+    const gv = c.surface === SURFACE.TARMAC ? 1 : 0.85 + hashNoise(x * 0.22, z * 0.22) * 0.32;
+    r = lerp(r, sc[0] * gv, k); g = lerp(g, sc[1] * gv, k); b = lerp(b, sc[2] * gv, k);
   }
 
   out[0] = clamp(r, 0, 1);
@@ -408,34 +468,14 @@ const TMPF = [0, 0];
 // Plant record layout (floats): x, y, z, species, scale, rotation, ageSeed,
 // health, id-hash.
 export const PLANT_STRIDE = 9;
-export const ROCK_STRIDE = 8; // x,y,z,scale,rotX,rotY,rotZ,kind
-export const GRASS_STRIDE = 6; // x,y,z,scale,rot,type
+export const ROCK_STRIDE = 8; // x,y,z,scale,rotX,rotY,rotZ,biome
+export const GRASS_STRIDE = 7; // x,y,z,scale,rot,type,biome
 
-const SPECIES = {
-  OAK: 0, PINE: 1, BIRCH: 2, PALM: 3, ACACIA: 4, CACTUS: 5, WILLOW: 6, SNAG: 7, JUNGLE: 8, SPRUCE: 9,
-  BUSH: 10, FERN: 11, SAPLING: 12,
-};
+// Species selection lives in biomes.js as a per-biome mix table, so the oracle,
+// the scatter and the geometry builders can never disagree about what grows
+// where. This module just rolls the dice.
 
-function speciesFor(biome, r) {
-  switch (biome) {
-    case BIOME.FOREST: return r < 0.42 ? SPECIES.OAK : r < 0.68 ? SPECIES.BIRCH : r < 0.88 ? SPECIES.PINE : SPECIES.SNAG;
-    case BIOME.RAINFOREST: return r < 0.62 ? SPECIES.JUNGLE : r < 0.85 ? SPECIES.OAK : SPECIES.FERN;
-    case BIOME.TAIGA: return r < 0.55 ? SPECIES.SPRUCE : r < 0.9 ? SPECIES.PINE : SPECIES.SNAG;
-    case BIOME.TUNDRA: return r < 0.5 ? SPECIES.BUSH : SPECIES.SNAG;
-    case BIOME.SNOW: return r < 0.7 ? SPECIES.SPRUCE : SPECIES.SNAG;
-    case BIOME.DESERT: return r < 0.75 ? SPECIES.CACTUS : SPECIES.BUSH;
-    case BIOME.SAVANNA: return r < 0.7 ? SPECIES.ACACIA : SPECIES.BUSH;
-    case BIOME.SWAMP: return r < 0.55 ? SPECIES.WILLOW : r < 0.8 ? SPECIES.FERN : SPECIES.SNAG;
-    case BIOME.BEACH: return SPECIES.PALM;
-    case BIOME.REEF: return SPECIES.FERN;
-    case BIOME.MEADOW: return r < 0.45 ? SPECIES.OAK : r < 0.7 ? SPECIES.BIRCH : SPECIES.BUSH;
-    case BIOME.ALPINE: return r < 0.6 ? SPECIES.SPRUCE : SPECIES.BUSH;
-    case BIOME.GRASSLAND: return r < 0.5 ? SPECIES.OAK : r < 0.75 ? SPECIES.BUSH : SPECIES.BIRCH;
-    default: return SPECIES.BUSH;
-  }
-}
-
-function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver) {
+function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver, grail, gsite, gfarm) {
   const plants = [];
   const rocks = [];
   const grass = [];
@@ -470,13 +510,16 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
       const info = BIOME_INFO[biome];
       const r1 = ((h1 >>> 20) & 4095) / 4095;
 
-      const underwater = wl > h + 0.15;
-      const slopeOk = true;
-      const built = gtown[gi] > 0.25 || groad[gi] > 0.12;
+      const depth = wl > -9000 ? wl - h : -1;
+      const underwater = depth > 0.15;
+      // Kelp and reef weed are the only things that grow with their feet in
+      // the sea, and only where light still reaches the bottom.
+      const marine = underwater && depth < 22 && (biome === BIOME.KELP || biome === BIOME.REEF);
+      const built = gtown[gi] > 0.25 || groad[gi] > 0.12 || grail[gi] > 0.10 || gsite[gi] > 0.35;
 
       // trees
       const density = info.trees * (0.55 + gmoist[gi] * 0.9);
-      if (!underwater && !built && slopeOk && r1 < density * cell * cell * 0.0082) {
+      if ((!underwater || marine) && !built && r1 < density * cell * cell * 0.0082) {
         const r2 = hash3f(ci, cj, 0x77aa);
         const sp = speciesFor(biome, r2);
         const r3 = hash3f(ci, cj, 0x1188);
@@ -490,7 +533,7 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
           1.0, // health
           hash3i(ci, cj, 0xaced) >>> 0
         );
-      } else if (!built && r1 > 1 - info.rocks * cell * cell * 0.0032) {
+      } else if (!built && !underwater && r1 > 1 - info.rocks * cell * cell * 0.0032) {
         const r2 = hash3f(ci, cj, 0x2299);
         const r3 = hash3f(ci, cj, 0x3377);
         rocks.push(
@@ -499,7 +542,7 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
           hash3f(ci, cj, 0x1) * 0.7,
           r3 * 6.2831853,
           hash3f(ci, cj, 0x2) * 0.7,
-          underwater ? 1 : 0
+          biome
         );
       }
     }
@@ -524,9 +567,11 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
         const g = gridAt(lx, lz);
         const h = gh[g];
         if (gwater[g] > h + 0.05) continue;
-        if (gtown[g] > 0.4 || groad[g] > 0.2) continue;
-        const info = BIOME_INFO[gbiome[g]];
-        const dens = info.grass * (0.6 + gmoist[g] * 0.7);
+        if (gtown[g] > 0.4 || groad[g] > 0.2 || grail[g] > 0.15 || gsite[g] > 0.5) continue;
+        const biome = gbiome[g];
+        const info = BIOME_INFO[biome];
+        // Worked land carries a crop, not a wild sward, and it is denser.
+        const dens = info.grass * (0.6 + gmoist[g] * 0.7) * (1 + gfarm[g] * 0.5);
         const r = ((hh >>> 18) & 2047) / 2047;
         // Cap the pass rate: a wet meadow's density (1.4 * 1.3) used to pass
         // every cell - nearly 8000 tufts per chunk - which exhausted the
@@ -537,7 +582,8 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
           px, h, pz,
           0.55 + hash3f(ci, cj, 0x6) * 0.65,
           hash3f(ci, cj, 0x7) * 6.2831853,
-          isFlower ? 1 + Math.floor(hash3f(ci, cj, 0x8) * 3) : 0
+          isFlower ? 1 + Math.floor(hash3f(ci, cj, 0x8) * 3) : 0,
+          biome
         );
       }
     }
@@ -551,3 +597,4 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
 }
 
 export { SPECIES };
+

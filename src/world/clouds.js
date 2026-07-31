@@ -49,7 +49,7 @@ export class Clouds {
     this.drift = new THREE.Vector2(0, 0);
 
     this.mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-    injectAtmosphere(this.mat, { key: 'cloud' });
+    injectAtmosphere(this.mat, { key: 'cloud', snow: false });
 
     this.meshes = [];
     for (let v = 0; v < 2; v++) {

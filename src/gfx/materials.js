@@ -72,6 +72,9 @@ export function makeTerrainMaterial() {
   });
   injectAtmosphere(mat, {
     key: 'terrain',
+    // The worker already baked climate snow into the vertex colours using the
+    // true local temperature, so the shared shader term would double it.
+    snow: false,
     vertexPars: /* glsl */ `
       attribute vec4 aux;
       varying vec4 vAux;
@@ -253,9 +256,9 @@ export function makeFoliageMaterial(opts = {}) {
   });
   injectAtmosphere(mat, {
     key: 'foliage' + (opts.key || ''),
-    // vUpY carries the geometry normal's tilt: flat shading discards the
-    // vNormal varying, and snow still needs to know which faces look up.
-    vertexPars: WIND_PARS + `\nvarying float vUpY;\n`,
+    // Snow on leaves and branches comes from the shared climate term now, so
+    // a spruce standing in a snowfield is white whether or not it is snowing.
+    vertexPars: WIND_PARS,
     vertexBody: /* glsl */ `
       {
         vec3 origin = vec3( 0.0 );
@@ -264,15 +267,6 @@ export function makeFoliageMaterial(opts = {}) {
         #endif
         origin += vec3( modelMatrix[3][0], modelMatrix[3][1], modelMatrix[3][2] );
         transformed = windSway( transformed, origin, ${(opts.stiffness || 0.22).toFixed(3)}, ${(opts.sway || 1.0).toFixed(3)} );
-        vUpY = normal.y;
-      }
-    `,
-    fragmentPars: `varying float vUpY;\nuniform float uSnowAmount;`,
-    colorFragment: /* glsl */ `
-      {
-        // Snow settles on upward-facing leaves and branches.
-        float snow = uSnowAmount * pow( clamp( vUpY, 0.0, 1.0 ), 1.6 );
-        diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.90, 0.93, 0.98 ), snow );
       }
     `,
     // Leaves are thin: looking through a canopy toward the sun should glow.

@@ -15,6 +15,13 @@ import { clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 
 const MAX_VOICES = 26;
 
+// Anything with a closed canopy overhead sounds the same: close, damped, and
+// with the high end eaten by leaves.
+const FOREST_BIOMES = new Set([
+  BIOME.FOREST, BIOME.RAINFOREST, BIOME.TAIGA, BIOME.DRY_FOREST,
+  BIOME.CLOUD_FOREST, BIOME.BAMBOO, BIOME.MANGROVE, BIOME.SWAMP,
+]);
+
 export class Audio {
   constructor(world) {
     this.world = world;
@@ -602,6 +609,88 @@ export class Audio {
         this.tone({ pos, freq: 141, glide: 88, glideTime: 3.0, dur: 4.4, gain: 0.10 * g, wave: 'triangle', attack: 1.2, reverb: 0.95, maxDist: 3000, delay: 0.4 });
         this.music.cue('note');
         break;
+
+      /* --- the voices the new continents needed ------------------------- */
+      case 'sheep':
+        this.tone({ pos, freq: 440, glide: 330, glideTime: 0.55, dur: 0.7, gain: 0.10 * g, wave: 'sawtooth', vibrato: 19, vibratoDepth: 90 });
+        break;
+      case 'horse':
+        // A whinny: a fast descending chirp on top of a snort.
+        this.tone({ pos, freq: 780, glide: 260, glideTime: 0.7, dur: 0.85, gain: 0.12 * g, wave: 'sawtooth', vibrato: 34, vibratoDepth: 130, reverb: 0.5 });
+        this.burst({ pos, freq: 220, q: 1.4, gain: 0.09 * g, release: 0.35, sweep: 90 });
+        break;
+      case 'yak':
+      case 'buffalo':
+        this.tone({ pos, freq: 130, glide: 96, glideTime: 1.0, dur: 1.3, gain: 0.15 * g, wave: 'sawtooth', vibrato: 7, vibratoDepth: 9, attack: 0.15, reverb: 0.6, maxDist: 700 });
+        break;
+      case 'camel':
+        this.tone({ pos, freq: 190, glide: 120, glideTime: 0.8, dur: 1.0, gain: 0.12 * g, wave: 'square', vibrato: 12, vibratoDepth: 40 });
+        break;
+      case 'bear':
+        this.tone({ pos, freq: 110, glide: 74, glideTime: 0.9, dur: 1.2, gain: 0.17 * g, wave: 'sawtooth', vibrato: 9, vibratoDepth: 16, attack: 0.1, reverb: 0.7, maxDist: 900 });
+        this.burst({ pos, freq: 330, q: 0.9, gain: 0.10 * g, release: 0.7, sweep: 120 });
+        break;
+      case 'lion':
+        // The roar carries a very long way, which is most of its effect.
+        this.tone({ pos, freq: 88, glide: 58, glideTime: 1.5, dur: 2.1, gain: 0.22 * g, wave: 'sawtooth', vibrato: 6, vibratoDepth: 14, attack: 0.18, reverb: 0.85, maxDist: 2000 });
+        this.tone({ pos, freq: 176, glide: 116, glideTime: 1.5, dur: 2.0, gain: 0.09 * g, wave: 'triangle', attack: 0.25, reverb: 0.8, maxDist: 2000 });
+        break;
+      case 'elephant':
+        this.tone({ pos, freq: 240, glide: 420, glideTime: 0.5, dur: 1.4, gain: 0.20 * g, wave: 'sawtooth', vibrato: 8, vibratoDepth: 50, attack: 0.09, reverb: 0.7, maxDist: 2200 });
+        this.tone({ pos, freq: 42, glide: 34, glideTime: 1.6, dur: 2.4, gain: 0.16 * g, wave: 'sine', attack: 0.4, maxDist: 2600 });
+        break;
+      case 'hippo':
+        for (let i = 0; i < 3; i++) {
+          this.tone({ pos, freq: 96, glide: 70, glideTime: 0.3, dur: 0.4, gain: 0.16 * g, wave: 'square', delay: i * 0.34, reverb: 0.7, maxDist: 1200 });
+        }
+        break;
+      case 'moose':
+        this.tone({ pos, freq: 180, glide: 128, glideTime: 1.1, dur: 1.5, gain: 0.14 * g, wave: 'sawtooth', vibrato: 5, vibratoDepth: 12, attack: 0.2, reverb: 0.75, maxDist: 1400 });
+        break;
+      case 'monkey': {
+        const n = 3 + Math.floor(Math.random() * 4);
+        for (let i = 0; i < n; i++) {
+          this.tone({
+            pos, freq: 900 + Math.random() * 700, glide: 400, glideTime: 0.09, dur: 0.11,
+            gain: 0.10 * g, wave: 'square', delay: i * (0.09 + Math.random() * 0.08), reverb: 0.55,
+          });
+        }
+        break;
+      }
+      case 'parrot':
+        for (let i = 0; i < 2; i++) {
+          this.tone({ pos, freq: 2100, glide: 1200, glideTime: 0.14, dur: 0.2, gain: 0.11 * g, wave: 'sawtooth', vibrato: 40, vibratoDepth: 300, delay: i * 0.24, reverb: 0.5 });
+        }
+        break;
+      case 'crow':
+        for (let i = 0; i < 3; i++) {
+          this.burst({ pos, freq: 900, q: 2.2, gain: 0.11 * g, release: 0.16, delay: i * 0.28, sweep: 520 });
+        }
+        break;
+      case 'vulture':
+        this.burst({ pos, freq: 620, q: 1.4, gain: 0.09 * g, release: 0.5, sweep: 260, reverb: 0.6 });
+        break;
+      case 'heron':
+        this.burst({ pos, freq: 480, q: 3.5, gain: 0.13 * g, release: 0.42, sweep: 200, reverb: 0.6, maxDist: 800 });
+        break;
+      case 'penguin':
+        for (let i = 0; i < 4; i++) {
+          this.burst({ pos, freq: 1400, q: 2.6, gain: 0.08 * g, release: 0.12, delay: i * 0.16, sweep: 700 });
+        }
+        break;
+      case 'seal':
+        this.tone({ pos, freq: 300, glide: 190, glideTime: 0.5, dur: 0.7, gain: 0.12 * g, wave: 'sawtooth', vibrato: 16, vibratoDepth: 60, reverb: 0.65 });
+        break;
+      case 'dolphin': {
+        const n = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < n; i++) {
+          this.tone({
+            pos, freq: 3800 + Math.random() * 3000, glide: 1600, glideTime: 0.10, dur: 0.13,
+            gain: 0.07 * g, wave: 'sine', delay: i * 0.10, reverb: 0.6, maxDist: 700,
+          });
+        }
+        break;
+      }
     }
   }
 
@@ -729,7 +818,7 @@ export class Audio {
     let ir = 'outdoor';
     if (under) ir = 'water';
     else if (shelter > 0.6) ir = 'indoor';
-    else if (s.biome === BIOME.FOREST || s.biome === BIOME.RAINFOREST || s.biome === BIOME.TAIGA) ir = 'forest';
+    else if (FOREST_BIOMES.has(s.biome)) ir = 'forest';
     else if (p.position.y > 250 || s.mountain > 220) ir = 'valley';
     if (ir !== this._currentIR) {
       this._currentIR = ir;

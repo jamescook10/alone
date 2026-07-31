@@ -13,28 +13,13 @@
 import * as THREE from 'three';
 import { makeFoliageMaterial, makeSolidMaterial } from '../gfx/materials.js';
 import { Rng, hash3f, clamp, lerp, saturate, smoothstep } from '../core/noise.js';
-import { BIOME_INFO } from './worldgen.js';
+import { BIOME, BIOME_INFO, SPECIES, SPECIES_INFO } from './worldgen.js';
 
-export const SPECIES = {
-  OAK: 0, PINE: 1, BIRCH: 2, PALM: 3, ACACIA: 4, CACTUS: 5, WILLOW: 6, SNAG: 7,
-  JUNGLE: 8, SPRUCE: 9, BUSH: 10, FERN: 11, SAPLING: 12,
-};
-
-export const SPECIES_INFO = [
-  { name: 'oak', height: 11, cap: 2600, fruit: 'apple', fruitChance: 0.5, mature: 5.5, burn: 1.0, wood: 4 },
-  { name: 'pine', height: 15, cap: 2600, fruit: 'pinecone', fruitChance: 0.3, mature: 6.5, burn: 1.3, wood: 4 },
-  { name: 'birch', height: 12, cap: 1800, fruit: null, fruitChance: 0, mature: 4.5, burn: 1.1, wood: 3 },
-  { name: 'palm', height: 13, cap: 900, fruit: 'coconut', fruitChance: 0.6, mature: 6, burn: 0.9, wood: 3 },
-  { name: 'acacia', height: 9, cap: 900, fruit: null, fruitChance: 0, mature: 6, burn: 1.0, wood: 3 },
-  { name: 'cactus', height: 4.5, cap: 700, fruit: 'prickly pear', fruitChance: 0.45, mature: 8, burn: 0.4, wood: 1 },
-  { name: 'willow', height: 10, cap: 700, fruit: null, fruitChance: 0, mature: 5, burn: 0.9, wood: 3 },
-  { name: 'dead tree', height: 8, cap: 900, fruit: null, fruitChance: 0, mature: 3, burn: 1.8, wood: 3 },
-  { name: 'kapok', height: 24, cap: 1400, fruit: 'mango', fruitChance: 0.5, mature: 9, burn: 0.9, wood: 6 },
-  { name: 'spruce', height: 17, cap: 2200, fruit: null, fruitChance: 0.15, mature: 7, burn: 1.4, wood: 4 },
-  { name: 'bush', height: 1.5, cap: 3000, fruit: 'berries', fruitChance: 0.55, mature: 1.6, burn: 1.5, wood: 1 },
-  { name: 'fern', height: 1.1, cap: 2200, fruit: null, fruitChance: 0, mature: 1.2, burn: 1.2, wood: 0 },
-  { name: 'sapling', height: 1.0, cap: 400, fruit: null, fruitChance: 0, mature: 1.0, burn: 1.4, wood: 0 },
-];
+// The species table itself lives in biomes.js, next to the per-biome mixes
+// that decide what grows where, so the oracle and the geometry can never
+// disagree. Re-exported here because everything else already imports it from
+// flora.
+export { SPECIES, SPECIES_INFO };
 
 const GROW_VERT_PARS = /* glsl */ `
 attribute float aBirth;
@@ -176,6 +161,17 @@ const BARK = {
   cactus: P(0.40, 0.62, 0.36),
   dead: P(0.63, 0.56, 0.49),
   jungle: P(0.47, 0.39, 0.31),
+  baobab: P(0.66, 0.58, 0.48),
+  euc: P(0.82, 0.76, 0.68),
+  banana: P(0.52, 0.60, 0.36),
+  bamboo: P(0.72, 0.76, 0.42),
+  mangrove: P(0.38, 0.32, 0.27),
+  cypress: P(0.52, 0.38, 0.30),
+  joshua: P(0.46, 0.38, 0.30),
+  olive: P(0.52, 0.48, 0.40),
+  aspen: P(0.83, 0.83, 0.76),
+  fern: P(0.44, 0.36, 0.28),
+  straw: P(0.80, 0.70, 0.36),
 };
 const LEAF = {
   oak: P(0.50, 0.70, 0.40),
@@ -189,6 +185,28 @@ const LEAF = {
   spruce: P(0.27, 0.45, 0.34),
   bush: P(0.46, 0.67, 0.38),
   fern: P(0.44, 0.69, 0.36),
+  // The new country needs colours the temperate palette never had: the
+  // grey-green of a hot dry hillside, the near-black of a mangrove, the gold
+  // of a larch in autumn and the bleached straw of a steppe.
+  baobab: P(0.56, 0.66, 0.36),
+  euc: P(0.55, 0.68, 0.50),
+  banana: P(0.46, 0.70, 0.32),
+  bamboo: P(0.56, 0.76, 0.40),
+  mangrove: P(0.26, 0.46, 0.30),
+  cypress: P(0.40, 0.56, 0.38),
+  joshua: P(0.48, 0.62, 0.42),
+  agave: P(0.52, 0.68, 0.50),
+  olive: P(0.62, 0.68, 0.52),
+  sage: P(0.62, 0.66, 0.50),
+  tussock: P(0.74, 0.72, 0.44),
+  dwarf: P(0.52, 0.64, 0.40),
+  treefern: P(0.38, 0.64, 0.36),
+  larch: P(0.66, 0.74, 0.36),
+  reed: P(0.58, 0.68, 0.38),
+  kelp: P(0.30, 0.42, 0.26),
+  moss: P(0.44, 0.62, 0.34),
+  wheat: P(0.86, 0.76, 0.38),
+  aspen: P(0.68, 0.80, 0.44),
 };
 
 /** Recursive branching used by the broadleaf species. */
@@ -351,6 +369,255 @@ function buildSpecies(sp, seed) {
       }
       break;
     }
+    case SPECIES.BAOBAB: {
+      // The silhouette everyone knows: an absurd bottle of a trunk with a
+      // handful of bare-looking branches on top.
+      const seg = 5;
+      let py = 0;
+      for (let i = 0; i < seg; i++) {
+        const t0 = i / seg, t1 = (i + 1) / seg;
+        const r0 = H * (0.20 - t0 * 0.135) * (1 + Math.sin(t0 * 3.1) * 0.06);
+        const r1 = H * (0.20 - t1 * 0.135);
+        bark.tube(0, H * 0.62 * t0, 0, 0, H * 0.62 * t1, 0, r0, r1, 8, BARK.baobab);
+        py = H * 0.62 * t1;
+      }
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * 6.283 + rng() * 0.6;
+        const ex = Math.cos(a) * H * 0.34, ez = Math.sin(a) * H * 0.34;
+        bark.tube(0, py, 0, ex, py + H * 0.24, ez, H * 0.035, H * 0.014, 5, BARK.baobab);
+        leaf.blob(ex, py + H * 0.28, ez, H * 0.20, H * 0.09, H * 0.20, 2, 6, LEAF.baobab, 0.3, rng);
+      }
+      break;
+    }
+    case SPECIES.EUCALYPT: {
+      // Tall, pale, and open enough to see the sky through - the opposite of
+      // an oak, which is why it reads as somewhere else entirely.
+      bark.tube(0, 0, 0, H * 0.04, H * 0.66, 0, H * 0.030, H * 0.014, 6, BARK.euc);
+      branch(bark, leaf, rng, {
+        barkCol: BARK.euc, leafCol: LEAF.euc, taper: 0.78, spread: 0.55, upBias: 0.52,
+        shrink: 0.70, minLen: H * 0.09, leafScale: 0.62, trifurcate: 0.3,
+      }, H * 0.04, H * 0.66, 0, 0.05, 1, 0, H * 0.24, H * 0.016, 2);
+      break;
+    }
+    case SPECIES.BANANA: {
+      bark.tube(0, 0, 0, 0, H * 0.42, 0, H * 0.075, H * 0.05, 6, BARK.banana);
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * 6.283 + rng() * 0.5;
+        leaf.blade(0, H * (0.40 + rng() * 0.12), 0, Math.cos(a), Math.sin(a),
+          H * 0.62, H * 0.16, 1.5, 5, LEAF.banana,
+          [LEAF.banana[0] * 1.35, LEAF.banana[1] * 1.2, LEAF.banana[2] * 1.1]);
+      }
+      break;
+    }
+    case SPECIES.BAMBOO: {
+      // A clump of culms, not one stem: bamboo grows in thickets and the
+      // thicket is the thing you actually see.
+      const culms = 5 + Math.floor(rng() * 4);
+      for (let k = 0; k < culms; k++) {
+        const a = rng() * 6.283;
+        const rr = rng() * 0.34;
+        const bx = Math.cos(a) * rr, bz = Math.sin(a) * rr;
+        const hh = H * (0.55 + rng() * 0.45);
+        const lean = (rng() - 0.5) * 0.13;
+        const nodes = 5;
+        for (let i = 0; i < nodes; i++) {
+          const t0 = i / nodes, t1 = (i + 1) / nodes;
+          bark.tube(bx + lean * hh * t0 * t0, hh * t0, bz, bx + lean * hh * t1 * t1, hh * t1, bz,
+            H * 0.011 * (1 - t0 * 0.35), H * 0.011 * (1 - t1 * 0.35), 4, BARK.bamboo);
+          if (i >= 2) {
+            const la = a + i * 1.9;
+            leaf.blade(bx + lean * hh * t1 * t1, hh * t1, bz, Math.cos(la), Math.sin(la),
+              H * 0.13, H * 0.012, 0.7, 3, LEAF.bamboo);
+          }
+        }
+      }
+      break;
+    }
+    case SPECIES.MANGROVE: {
+      // Stilt roots first, canopy second: a mangrove stands clear of its own
+      // water, which is the only reason it can live there.
+      const legs = 6;
+      for (let i = 0; i < legs; i++) {
+        const a = (i / legs) * 6.283 + rng() * 0.4;
+        bark.tube(Math.cos(a) * H * 0.30, -H * 0.06, Math.sin(a) * H * 0.30,
+          Math.cos(a) * H * 0.05, H * 0.30, Math.sin(a) * H * 0.05,
+          H * 0.020, H * 0.026, 4, BARK.mangrove);
+      }
+      branch(bark, leaf, rng, {
+        barkCol: BARK.mangrove, leafCol: LEAF.mangrove, taper: 0.74, spread: 0.78, upBias: 0.26,
+        shrink: 0.66, minLen: H * 0.14, leafScale: 1.0, trifurcate: 0.5,
+      }, 0, H * 0.30, 0, 0, 1, 0, H * 0.28, H * 0.045, 2);
+      break;
+    }
+    case SPECIES.CYPRESS: {
+      bark.tube(0, 0, 0, 0, H * 0.9, 0, H * 0.055, H * 0.008, 7, BARK.cypress);
+      // Buttressed base and the knees that ring a bald cypress in swamp water.
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * 6.283 + rng() * 0.5;
+        bark.tube(Math.cos(a) * H * 0.075, 0, Math.sin(a) * H * 0.075, 0, H * 0.13, 0,
+          H * 0.018, H * 0.010, 4, BARK.cypress);
+        const kr = H * (0.14 + rng() * 0.16);
+        bark.tube(Math.cos(a) * kr, -0.1, Math.sin(a) * kr, Math.cos(a) * kr, H * 0.045, Math.sin(a) * kr,
+          H * 0.014, H * 0.006, 4, BARK.cypress);
+      }
+      for (let i = 0; i < 6; i++) {
+        const t = i / 5;
+        const y = H * (0.34 + t * 0.60);
+        const r = H * (0.26 - t * 0.20);
+        leaf.blob(0, y, 0, r, H * 0.09, r, 2, 6, LEAF.cypress, 0.3, rng);
+      }
+      break;
+    }
+    case SPECIES.JOSHUA: {
+      bark.tube(0, 0, 0, 0, H * 0.42, 0, H * 0.075, H * 0.055, 6, BARK.joshua);
+      const arms = 3 + Math.floor(rng() * 3);
+      for (let i = 0; i < arms; i++) {
+        const a = (i / arms) * 6.283 + rng() * 0.7;
+        const ex = Math.cos(a) * H * 0.24, ez = Math.sin(a) * H * 0.24;
+        const ey = H * (0.58 + rng() * 0.22);
+        bark.tube(0, H * 0.42, 0, ex, ey, ez, H * 0.045, H * 0.032, 5, BARK.joshua);
+        for (let k = 0; k < 6; k++) {
+          const b = (k / 6) * 6.283;
+          leaf.blade(ex, ey, ez, Math.cos(b), Math.sin(b), H * 0.15, H * 0.020, -0.4, 2, LEAF.joshua);
+        }
+      }
+      break;
+    }
+    case SPECIES.AGAVE: {
+      const n = 9 + Math.floor(rng() * 4);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * 6.283 + rng() * 0.3;
+        leaf.blade(0, 0.05, 0, Math.cos(a), Math.sin(a), H * 0.95, H * 0.13, -0.55, 3,
+          LEAF.agave, [LEAF.agave[0] * 0.7, LEAF.agave[1] * 0.8, LEAF.agave[2] * 0.7]);
+      }
+      break;
+    }
+    case SPECIES.OLIVE: {
+      branch(bark, leaf, rng, {
+        barkCol: BARK.olive, leafCol: LEAF.olive, taper: 0.70, spread: 0.85, upBias: 0.30,
+        shrink: 0.64, minLen: H * 0.16, leafScale: 0.95, trifurcate: 0.55,
+      }, 0, 0, 0, 0.09, 1, -0.05, H * 0.34, H * 0.075, 2);
+      break;
+    }
+    case SPECIES.SAGE: {
+      const n = 5 + Math.floor(rng() * 3);
+      for (let i = 0; i < n; i++) {
+        const a = rng() * 6.283;
+        const r = rng() * 0.22;
+        leaf.blob(Math.cos(a) * r, H * (0.45 + rng() * 0.4), Math.sin(a) * r,
+          H * 0.34, H * 0.30, H * 0.34, 2, 5, LEAF.sage, 0.36, rng);
+      }
+      break;
+    }
+    case SPECIES.TUSSOCK:
+    case SPECIES.REED:
+    case SPECIES.WHEAT: {
+      const isReed = sp === SPECIES.REED;
+      const isWheat = sp === SPECIES.WHEAT;
+      const col = isReed ? LEAF.reed : isWheat ? LEAF.wheat : LEAF.tussock;
+      const n = isWheat ? 9 : 12 + Math.floor(rng() * 6);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * 6.283 + rng() * 0.6;
+        const r = rng() * H * (isWheat ? 0.12 : 0.20);
+        const lean = isReed || isWheat ? 0.10 : 0.55;
+        leaf.blade(Math.cos(a) * r, 0.02, Math.sin(a) * r, Math.cos(a), Math.sin(a),
+          H * (0.75 + rng() * 0.35), H * (isWheat ? 0.030 : 0.045), lean, 3,
+          col, [col[0] * 1.3, col[1] * 1.25, col[2] * 1.1]);
+      }
+      if (isWheat) {
+        // An ear on the top of each stalk, so a field reads as a crop.
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * 6.283;
+          leaf.blob(Math.cos(a) * H * 0.06, H * 0.92, Math.sin(a) * H * 0.06,
+            H * 0.045, H * 0.13, H * 0.045, 2, 4, BARK.straw, 0.18, rng);
+        }
+      }
+      break;
+    }
+    case SPECIES.DWARF_BIRCH: {
+      const n = 4 + Math.floor(rng() * 4);
+      for (let i = 0; i < n; i++) {
+        const a = rng() * 6.283;
+        const r = rng() * H * 0.30;
+        bark.tube(0, 0, 0, Math.cos(a) * r, H * (0.45 + rng() * 0.3), Math.sin(a) * r,
+          H * 0.035, H * 0.016, 4, BARK.birch);
+        leaf.blob(Math.cos(a) * r, H * 0.62, Math.sin(a) * r,
+          H * 0.30, H * 0.24, H * 0.30, 2, 5, LEAF.dwarf, 0.34, rng);
+      }
+      break;
+    }
+    case SPECIES.TREE_FERN: {
+      bark.tube(0, 0, 0, 0, H * 0.62, 0, H * 0.048, H * 0.036, 6, BARK.fern);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * 6.283 + rng() * 0.4;
+        leaf.blade(0, H * 0.62, 0, Math.cos(a), Math.sin(a), H * 0.52, H * 0.085, 0.9, 5,
+          LEAF.treefern, [LEAF.treefern[0] * 1.4, LEAF.treefern[1] * 1.25, LEAF.treefern[2] * 1.1]);
+      }
+      break;
+    }
+    case SPECIES.LARCH: {
+      bark.tube(0, 0, 0, 0, H, 0, H * 0.032, H * 0.005, 6, BARK.pine);
+      for (let i = 0; i < 8; i++) {
+        const t = i / 7;
+        const y = H * (0.14 + t * 0.82);
+        const r = H * (0.26 - t * 0.215) * (0.8 + rng() * 0.4);
+        // Sparser and airier than a spruce, and gold rather than blue-green.
+        leaf.blob(0, y, 0, r, H * 0.075, r, 2, 5, LEAF.larch, 0.34, rng);
+      }
+      break;
+    }
+    case SPECIES.KELP: {
+      // Long fronds streaming off a holdfast. The foliage wind sway in the
+      // shader does the rest: kelp waves because everything green does.
+      const strands = 4 + Math.floor(rng() * 3);
+      for (let k = 0; k < strands; k++) {
+        const a = rng() * 6.283;
+        const r = rng() * 0.4;
+        const bx = Math.cos(a) * r, bz = Math.sin(a) * r;
+        const hh = H * (0.6 + rng() * 0.5);
+        bark.tube(bx, 0, bz, bx + Math.cos(a) * 0.5, hh, bz + Math.sin(a) * 0.5,
+          H * 0.012, H * 0.008, 4, LEAF.kelp);
+        for (let i = 1; i < 5; i++) {
+          const t = i / 5;
+          const b = a + i * 2.4;
+          leaf.blade(bx + Math.cos(a) * 0.5 * t, hh * t, bz + Math.sin(a) * 0.5 * t,
+            Math.cos(b), Math.sin(b), H * 0.22, H * 0.035, 0.35, 3, LEAF.kelp);
+        }
+      }
+      break;
+    }
+    case SPECIES.MOSS: {
+      const n = 3 + Math.floor(rng() * 3);
+      for (let i = 0; i < n; i++) {
+        const a = rng() * 6.283;
+        const r = rng() * 0.35;
+        leaf.blob(Math.cos(a) * r, H * 0.30, Math.sin(a) * r,
+          H * 0.72, H * 0.34, H * 0.72, 2, 6, LEAF.moss, 0.42, rng);
+      }
+      break;
+    }
+    case SPECIES.ASPEN: {
+      branch(bark, leaf, rng, {
+        barkCol: BARK.aspen, leafCol: LEAF.aspen, taper: 0.86, spread: 0.26, upBias: 0.76,
+        shrink: 0.72, minLen: H * 0.10, leafScale: 0.80, trifurcate: 0.3,
+      }, 0, 0, 0, 0, 1, 0, H * 0.46, H * 0.024, 2);
+      break;
+    }
+    case SPECIES.DEAD_PALM: {
+      const lean = (rng() - 0.5) * 0.5;
+      let px = 0, py = 0, pz = 0;
+      for (let i = 0; i < 6; i++) {
+        const t = i / 6, t2 = (i + 1) / 6;
+        const nx = lean * H * t2 * t2, ny = H * t2, nz = 0;
+        bark.tube(px, py, pz, nx, ny, nz, H * 0.032 * (1 - t * 0.4), H * 0.032 * (1 - t2 * 0.4), 5, BARK.dead);
+        px = nx; py = ny; pz = nz;
+      }
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * 6.283 + rng();
+        leaf.blade(px, py, pz, Math.cos(a), Math.sin(a), H * 0.34, H * 0.055, 2.4, 4, BARK.dead);
+      }
+      break;
+    }
     default: {
       bark.tube(0, 0, 0, 0, 0.8, 0, 0.03, 0.018, 4, BARK.oak);
       leaf.blob(0, 0.95, 0, 0.24, 0.22, 0.24, 2, 5, LEAF.oak, 0.2, rng);
@@ -363,42 +630,99 @@ function buildSpecies(sp, seed) {
 }
 
 
+// Far silhouettes, one line of data each. Everything past the near ring is a
+// shape against the sky and nothing more, so the only questions worth asking
+// are "what colour" and "what outline".
+const FAR = {
+  [SPECIES.OAK]: ['round', BARK.oak, LEAF.oak],
+  [SPECIES.PINE]: ['conifer', BARK.pine, LEAF.pine],
+  [SPECIES.BIRCH]: ['round', BARK.birch, LEAF.birch],
+  [SPECIES.PALM]: ['palm', BARK.palm, LEAF.palm],
+  [SPECIES.ACACIA]: ['flat', BARK.acacia, LEAF.acacia],
+  [SPECIES.CACTUS]: ['column', BARK.cactus, BARK.cactus],
+  [SPECIES.WILLOW]: ['round', BARK.oak, LEAF.willow],
+  [SPECIES.SNAG]: ['bare', BARK.dead, BARK.dead],
+  [SPECIES.JUNGLE]: ['round', BARK.jungle, LEAF.jungle],
+  [SPECIES.SPRUCE]: ['conifer', BARK.pine, LEAF.spruce],
+  [SPECIES.BUSH]: ['tuft', BARK.oak, LEAF.bush],
+  [SPECIES.FERN]: ['tuft', BARK.fern, LEAF.fern],
+  [SPECIES.SAPLING]: ['tuft', BARK.oak, LEAF.oak],
+  [SPECIES.BAOBAB]: ['fat', BARK.baobab, LEAF.baobab],
+  [SPECIES.EUCALYPT]: ['round', BARK.euc, LEAF.euc],
+  [SPECIES.BANANA]: ['palm', BARK.banana, LEAF.banana],
+  [SPECIES.BAMBOO]: ['column', BARK.bamboo, LEAF.bamboo],
+  [SPECIES.MANGROVE]: ['round', BARK.mangrove, LEAF.mangrove],
+  [SPECIES.CYPRESS]: ['conifer', BARK.cypress, LEAF.cypress],
+  [SPECIES.JOSHUA]: ['flat', BARK.joshua, LEAF.joshua],
+  [SPECIES.AGAVE]: ['tuft', BARK.joshua, LEAF.agave],
+  [SPECIES.OLIVE]: ['round', BARK.olive, LEAF.olive],
+  [SPECIES.SAGE]: ['tuft', BARK.olive, LEAF.sage],
+  [SPECIES.TUSSOCK]: ['tuft', BARK.straw, LEAF.tussock],
+  [SPECIES.DWARF_BIRCH]: ['tuft', BARK.birch, LEAF.dwarf],
+  [SPECIES.TREE_FERN]: ['palm', BARK.fern, LEAF.treefern],
+  [SPECIES.LARCH]: ['conifer', BARK.pine, LEAF.larch],
+  [SPECIES.REED]: ['tuft', BARK.straw, LEAF.reed],
+  [SPECIES.KELP]: ['tuft', LEAF.kelp, LEAF.kelp],
+  [SPECIES.MOSS]: ['tuft', LEAF.moss, LEAF.moss],
+  [SPECIES.WHEAT]: ['tuft', BARK.straw, LEAF.wheat],
+  [SPECIES.ASPEN]: ['round', BARK.aspen, LEAF.aspen],
+  [SPECIES.DEAD_PALM]: ['bare', BARK.dead, BARK.dead],
+};
+
 /**
- * A deliberately crude version of each species, about thirty triangles, used
- * for everything past the nearest ring of chunks. At that distance a tree is
- * a silhouette, and thirty triangles is a perfectly good silhouette.
+ * A deliberately crude silhouette, about thirty triangles, used for everything
+ * past the nearest ring of chunks. At that distance a tree is a shape against
+ * the sky and thirty triangles is a perfectly good shape.
+ *
+ * There is one of these per *form*, not per species: built at unit height with
+ * white foliage, then scaled and tinted per instance. Thirty-three species
+ * would otherwise have meant thirty-three more instanced meshes in the render
+ * list every time the far ring crossed a biome boundary; eight forms cover the
+ * same ground for a fifth of the draw calls.
  */
-function buildFarSpecies(sp, seed) {
-  const rng = new Rng(seed + sp * 313).next;
+const FAR_FORMS = ['round', 'conifer', 'palm', 'column', 'flat', 'tuft', 'bare', 'fat'];
+
+// Relative to the tinted foliage colour. A far trunk is two pixels of darker
+// something underneath a canopy, and that is all it ever needs to be.
+const FAR_TRUNK = [0.55, 0.48, 0.40];
+const FAR_LEAF = [1, 1, 1];
+
+function buildFarForm(form, seed) {
+  const rng = new Rng(seed + form.length * 313 + form.charCodeAt(0) * 7).next;
   const b = new MeshBuilder();
-  const H = SPECIES_INFO[sp].height;
-  const conifer = sp === SPECIES.PINE || sp === SPECIES.SPRUCE;
-  const bare = sp === SPECIES.SNAG;
-  const trunkCol = conifer ? BARK.pine : sp === SPECIES.BIRCH ? BARK.birch : bare ? BARK.dead : BARK.oak;
-  const leafCol = conifer ? (sp === SPECIES.SPRUCE ? LEAF.spruce : LEAF.pine)
-    : sp === SPECIES.PALM ? LEAF.palm
-    : sp === SPECIES.JUNGLE ? LEAF.jungle
-    : sp === SPECIES.ACACIA ? LEAF.acacia
-    : sp === SPECIES.CACTUS ? BARK.cactus
-    : LEAF.oak;
-  if (sp === SPECIES.FERN || sp === SPECIES.BUSH) {
-    b.blob(0, H * 0.5, 0, H * 0.42, H * 0.42, H * 0.42, 2, 4, leafCol, 0.3, rng);
+  const H = 1;
+
+  if (form === 'tuft') {
+    b.blob(0, H * 0.5, 0, H * 0.44, H * 0.42, H * 0.44, 2, 4, FAR_LEAF, 0.3, rng);
     return b.toGeometry();
   }
-  b.tube(0, 0, 0, 0, H * (bare ? 0.9 : conifer ? 0.95 : 0.6), 0, H * 0.035, H * 0.016, 4, trunkCol);
-  if (bare) {
-    b.tube(0, H * 0.5, 0, H * 0.26, H * 0.8, 0, H * 0.018, H * 0.006, 3, trunkCol);
-    b.tube(0, H * 0.55, 0, -H * 0.22, H * 0.85, H * 0.1, H * 0.018, H * 0.006, 3, trunkCol);
+  if (form === 'bare') {
+    b.tube(0, 0, 0, 0, H * 0.9, 0, H * 0.035, H * 0.016, 4, FAR_TRUNK);
+    b.tube(0, H * 0.5, 0, H * 0.26, H * 0.8, 0, H * 0.018, H * 0.006, 3, FAR_TRUNK);
+    b.tube(0, H * 0.55, 0, -H * 0.22, H * 0.85, H * 0.1, H * 0.018, H * 0.006, 3, FAR_TRUNK);
     return b.toGeometry();
   }
-  if (conifer) {
-    b.blob(0, H * 0.52, 0, H * 0.24, H * 0.44, H * 0.24, 2, 4, leafCol, 0.16, rng);
-  } else if (sp === SPECIES.PALM) {
-    b.blob(0, H * 0.66, 0, H * 0.34, H * 0.10, H * 0.34, 2, 4, leafCol, 0.30, rng);
-  } else if (sp === SPECIES.CACTUS) {
-    b.blob(0, H * 0.55, 0, H * 0.14, H * 0.42, H * 0.14, 2, 4, leafCol, 0.10, rng);
+  if (form === 'fat') {
+    b.tube(0, 0, 0, 0, H * 0.6, 0, H * 0.19, H * 0.07, 6, FAR_TRUNK);
+    b.blob(0, H * 0.78, 0, H * 0.42, H * 0.14, H * 0.42, 2, 5, FAR_LEAF, 0.24, rng);
+    return b.toGeometry();
+  }
+  b.tube(0, 0, 0, 0, H * (form === 'conifer' || form === 'column' ? 0.95 : 0.6), 0,
+    H * 0.035, H * 0.016, 4, FAR_TRUNK);
+  if (form === 'conifer') {
+    // Two stacked cones rather than one ellipsoid: a single blob read as a
+    // floating diamond right at the distance where the near geometry - seven
+    // tiered skirts - hands over to it.
+    b.blob(0, H * 0.42, 0, H * 0.26, H * 0.30, H * 0.26, 2, 4, FAR_LEAF, 0.16, rng);
+    b.blob(0, H * 0.74, 0, H * 0.16, H * 0.26, H * 0.16, 2, 4, FAR_LEAF, 0.16, rng);
+  } else if (form === 'palm') {
+    b.blob(0, H * 0.66, 0, H * 0.34, H * 0.10, H * 0.34, 2, 4, FAR_LEAF, 0.30, rng);
+  } else if (form === 'column') {
+    b.blob(0, H * 0.55, 0, H * 0.14, H * 0.42, H * 0.14, 2, 4, FAR_LEAF, 0.10, rng);
+  } else if (form === 'flat') {
+    b.blob(0, H * 0.80, 0, H * 0.40, H * 0.09, H * 0.40, 2, 5, FAR_LEAF, 0.22, rng);
   } else {
-    b.blob(0, H * 0.72, 0, H * 0.36, H * 0.30, H * 0.36, 2, 4, leafCol, 0.26, rng);
+    b.blob(0, H * 0.72, 0, H * 0.36, H * 0.30, H * 0.36, 2, 4, FAR_LEAF, 0.26, rng);
   }
   return b.toGeometry();
 }
@@ -473,6 +797,10 @@ class Pool {
     this.dirty = true;
   }
   commit() {
+    // A world with thirty-three species keeps most of its pools empty most of
+    // the time. Hiding them outright keeps them out of the render list and out
+    // of the shadow pass instead of relying on a zero-instance early-out.
+    this.mesh.visible = this.mesh.count > 0;
     if (!this.dirty) return;
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.birth) {
@@ -514,24 +842,35 @@ export class Flora {
 
     this.barkPools = [];
     this.leafPools = [];
-    this.farBarkPools = [];
-    this.farLeafPools = [];
     for (let sp = 0; sp < SPECIES_INFO.length; sp++) {
       const cap = SPECIES_INFO[sp].cap;
       const g = buildSpecies(sp, world.seed);
       this.barkPools[sp] = g.bark ? new Pool(g.bark, this.barkMat, cap, this.scene) : null;
       this.leafPools[sp] = g.leaf ? new Pool(g.leaf, this.leafMat, cap, this.scene) : null;
-      const farPool = new Pool(buildFarSpecies(sp, world.seed), this.leafMat, cap * 2, this.scene);
-      farPool.mesh.castShadow = false;
-      this.farBarkPools[sp] = farPool;
-      this.farLeafPools[sp] = null;
     }
 
-    // Rocks: one blobby geometry, scaled and rotated per instance.
+    // One far pool per silhouette form, shared by every species that has that
+    // outline; the per-instance tint and scale carry the difference.
+    this.farPools = {};
+    for (const form of FAR_FORMS) {
+      const pool = new Pool(buildFarForm(form, world.seed), this.leafMat, 7000, this.scene);
+      pool.mesh.castShadow = false;
+      this.farPools[form] = pool;
+    }
+    // Kept as a flat list purely so the smoke test and the draw-call probe
+    // can count what is actually on screen.
+    this.farBarkPools = FAR_FORMS.map((f) => this.farPools[f]);
+
+    // Rocks: one blobby geometry, scaled, rotated and tinted per instance. The
+    // tint rides the same per-instance attribute the growth shader uses, which
+    // is why the rock material is patched too - a boulder in a lava field has
+    // to be black and one in badlands red, or the ground and the stones on it
+    // stop belonging to the same place.
     const rb = new MeshBuilder();
     const rrng = new Rng(world.seed ^ 0x9a3).next;
-    rb.blob(0, 0.25, 0, 0.6, 0.42, 0.55, 2, 5, P(0.60, 0.58, 0.65), 0.40, rrng);
-    this.rockPool = new Pool(rb.toGeometry(), this.rockMat, 9000, this.scene, false);
+    rb.blob(0, 0.25, 0, 0.6, 0.42, 0.55, 2, 5, [1, 1, 1], 0.40, rrng);
+    this.rockPool = new Pool(rb.toGeometry(), this.rockMat, 9000, this.scene);
+    this._patchGrowth(this.rockMat);
     this.rockPool.mesh.castShadow = true;
 
     // Fruit clusters.
@@ -678,13 +1017,15 @@ export class Flora {
       const slot = this.rockPool.alloc(entry);
       if (slot < 0) break;
       this.rockPool.setMatrix(slot, this._rockMatrix(R, i));
+      const rc = rockTint(R[i + 7] | 0);
+      const v = 0.86 + hash3f(R[i] | 0, R[i + 2] | 0, 5) * 0.28;
+      this.rockPool.setGrowth(slot, -999, 99, rc[0] * v, rc[1] * v, rc[2] * v);
       entry.rocks.push(slot);
       entry.rockAt.push(i);
     }
 
     const G = scatter.grass;
-    const biomeTint = [0.9, 1.0, 0.8];
-    for (let i = 0; i < G.length; i += 6) {
+    for (let i = 0; i < G.length; i += 7) {
       const slot = this.grassPool.alloc(entry);
       if (slot < 0) break;
       const s = G[i + 3];
@@ -692,10 +1033,12 @@ export class Flora {
       M4.compose(VEC.set(G[i], G[i + 1], G[i + 2]), QUAT, SCL.set(s, s * (0.8 + s * 0.5), s));
       this.grassPool.setMatrix(slot, M4);
       const type = G[i + 5] | 0;
-      // The tint multiplies the blade's base-to-tip vertex gradient; these
-      // values land the tips around a pastel spring green after tonemapping.
+      // The tint multiplies the blade's base-to-tip vertex gradient. Grass is
+      // not one colour anywhere on Earth: a savanna is straw, a moor is rust,
+      // a meadow is spring green, and the difference is most of what tells you
+      // where you are from a hundred metres away.
       const t = type === 0
-        ? [0.26 + hash3f(i, node.x | 0, 3) * 0.14, 0.50, 0.20]
+        ? grassTint(G[i + 6] | 0, hash3f(i, node.x | 0, 3))
         : FLOWER_TINTS[(type - 1) % FLOWER_TINTS.length];
       this.grassPool.setGrowth(slot, -999, 99, t[0], t[1], t[2]);
       entry.grass.push(slot);
@@ -703,15 +1046,24 @@ export class Flora {
   }
 
   _poolsFor(rec) {
-    if (rec.far) return [this.farBarkPools[rec.sp], this.farLeafPools[rec.sp]];
+    if (rec.far) return [this.farPools[FAR[rec.sp][0]], null];
     return [this.barkPools[rec.sp], this.leafPools[rec.sp]];
+  }
+
+  /**
+   * The instance scale for a plant. Near geometry is built at the species'
+   * real height, so it is just the per-plant scale; the shared far silhouettes
+   * are unit height and carry the species height here instead.
+   */
+  _scaleOf(rec) {
+    return rec.far ? rec.scale * SPECIES_INFO[rec.sp].height : rec.scale;
   }
 
   _addPlant(entry, p) {
     const info = SPECIES_INFO[p.sp];
     const far = !!entry.far;
-    const bp = far ? this.farBarkPools[p.sp] : this.barkPools[p.sp];
-    const lp = far ? this.farLeafPools[p.sp] : this.leafPools[p.sp];
+    const bp = far ? this.farPools[FAR[p.sp][0]] : this.barkPools[p.sp];
+    const lp = far ? null : this.leafPools[p.sp];
     const rec = {
       sp: p.sp, x: p.x, y: p.y, z: p.z, scale: p.scale, rot: p.rot,
       id: p.id, health: p.health !== undefined ? p.health : 1,
@@ -727,15 +1079,21 @@ export class Flora {
             : -1e9),
       far,
     };
+    const isc = this._scaleOf(rec);
     QUAT.setFromAxisAngle(UP, rec.rot);
-    M4.compose(VEC.set(rec.x, rec.y, rec.z), QUAT, SCL.set(rec.scale, rec.scale, rec.scale));
-    const burnt = 1 - saturate(1 - rec.health);
+    M4.compose(VEC.set(rec.x, rec.y, rec.z), QUAT, SCL.set(isc, isc, isc));
     const tint = rec.health >= 0.999 ? 1 : Math.max(0.10, rec.health);
     if (bp) {
       rec.slotBark = bp.alloc(entry);
       if (rec.slotBark >= 0) {
         bp.setMatrix(rec.slotBark, M4);
-        bp.setGrowth(rec.slotBark, rec.birth, rec.rate, tint, tint * 0.92, tint * 0.88);
+        // A far silhouette is white geometry, so its whole colour arrives on
+        // the tint; a near trunk is already coloured and only wants shading.
+        // The far geometry is white, so the tint is the reflectance itself -
+        // the same linear leaf colour the near geometry bakes into vertices.
+        const fc = far ? FAR[rec.sp][2] : null;
+        if (fc) bp.setGrowth(rec.slotBark, rec.birth, rec.rate, fc[0] * tint, fc[1] * tint, fc[2] * tint);
+        else bp.setGrowth(rec.slotBark, rec.birth, rec.rate, tint, tint * 0.92, tint * 0.88);
       }
     }
     if (lp && rec.health > 0.05) {
@@ -875,8 +1233,9 @@ export class Flora {
   _setSlotVisible(pool, slot, vis, p) {
     if (!pool) return;
     if (vis) {
+      const isc = pool === this.fruitPool ? p.scale : this._scaleOf(p);
       QUAT.setFromAxisAngle(UP, p.rot);
-      M4.compose(VEC.set(p.x, p.y, p.z), QUAT, SCL.set(p.scale, p.scale, p.scale));
+      M4.compose(VEC.set(p.x, p.y, p.z), QUAT, SCL.set(isc, isc, isc));
       pool.setMatrix(slot, M4);
     } else {
       pool.setMatrix(slot, HIDDEN);
@@ -1032,8 +1391,7 @@ export class Flora {
     if (dt > 0) this._retier(dt);
     this.barkPools.forEach((p) => p && p.commit());
     this.leafPools.forEach((p) => p && p.commit());
-    this.farBarkPools.forEach((p) => p && p.commit());
-    this.farLeafPools.forEach((p) => p && p.commit());
+    for (const form of FAR_FORMS) this.farPools[form].commit();
     this.rockPool.commit();
     this.grassPool.commit();
     this.fruitPool.commit();
@@ -1047,6 +1405,63 @@ export const FRUIT_REGROW = 0.45;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const EUL = new THREE.Euler();
+
+/**
+ * Ground-cover colour per biome. These multiply the tuft's own base-to-tip
+ * gradient, so they read as a tint rather than as a paint: the first number is
+ * the red the tips take, and the pair after it the green and blue.
+ */
+const GRASS_TINTS = {
+  [BIOME.MEADOW]: [0.30, 0.56, 0.20],
+  [BIOME.PRAIRIE]: [0.46, 0.52, 0.18],
+  [BIOME.GRASSLAND]: [0.34, 0.52, 0.20],
+  [BIOME.SAVANNA]: [0.62, 0.48, 0.14],
+  [BIOME.STEPPE]: [0.58, 0.50, 0.18],
+  [BIOME.SHRUBLAND]: [0.50, 0.48, 0.22],
+  [BIOME.DRY_FOREST]: [0.48, 0.50, 0.18],
+  [BIOME.MOOR]: [0.50, 0.40, 0.20],
+  [BIOME.BOG]: [0.40, 0.44, 0.22],
+  [BIOME.MARSH]: [0.32, 0.52, 0.22],
+  [BIOME.SWAMP]: [0.28, 0.48, 0.20],
+  [BIOME.MANGROVE]: [0.24, 0.44, 0.22],
+  [BIOME.TUNDRA]: [0.48, 0.44, 0.26],
+  [BIOME.TAIGA]: [0.30, 0.46, 0.24],
+  [BIOME.SNOW]: [0.62, 0.66, 0.66],
+  [BIOME.POLAR_DESERT]: [0.56, 0.56, 0.52],
+  [BIOME.GLACIER]: [0.66, 0.72, 0.78],
+  [BIOME.DESERT]: [0.66, 0.54, 0.20],
+  [BIOME.DUNES]: [0.70, 0.58, 0.22],
+  [BIOME.ROCKY_DESERT]: [0.60, 0.50, 0.20],
+  [BIOME.SALT_FLAT]: [0.68, 0.64, 0.48],
+  [BIOME.BADLANDS]: [0.62, 0.44, 0.18],
+  [BIOME.LAVA_FIELD]: [0.32, 0.46, 0.26],
+  [BIOME.RAINFOREST]: [0.24, 0.52, 0.20],
+  [BIOME.CLOUD_FOREST]: [0.26, 0.50, 0.24],
+  [BIOME.BAMBOO]: [0.34, 0.56, 0.20],
+  [BIOME.KARST]: [0.36, 0.54, 0.20],
+  [BIOME.CROPLAND]: [0.54, 0.52, 0.16],
+  [BIOME.OASIS]: [0.34, 0.56, 0.20],
+  [BIOME.ALPINE]: [0.38, 0.50, 0.26],
+  [BIOME.BEACH]: [0.52, 0.54, 0.24],
+  [BIOME.BLACK_SAND]: [0.40, 0.46, 0.28],
+};
+const DEFAULT_GRASS = [0.32, 0.50, 0.20];
+
+function grassTint(biome, jitter) {
+  const t = GRASS_TINTS[biome] || DEFAULT_GRASS;
+  // A little scatter in the red channel alone keeps a sward from banding.
+  return [t[0] + jitter * 0.12 - 0.06, t[1], t[2]];
+}
+
+/** Loose stone takes the colour of the bedrock it broke off. */
+function rockTint(biome) {
+  const info = BIOME_INFO[biome];
+  // BIOME_INFO already holds linear reflectances and the blob geometry is
+  // white, so the tint *is* the reflectance.
+  return (info && info.rock) || DEFAULT_ROCK;
+}
+// The lilac-grey the single hand-picked rock colour used to be, in linear.
+const DEFAULT_ROCK = [0.318, 0.297, 0.377];
 
 const FLOWER_TINTS = [
   [2.2, 1.4, 1.9],

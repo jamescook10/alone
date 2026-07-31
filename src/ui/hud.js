@@ -17,6 +17,7 @@ const HELP = [
   ['Wheel', 'zoom the camera in and out'],
   ['Tab', 'menu — inventory and settings'],
   ['F', 'fly (and land again) · leave a vehicle'],
+  ['Shift / C', 'aeroplane throttle up and down'],
   ['B', 'raise or drop a bulldozer blade'],
   ['H', 'horn'],
   ['J', 'journal'],

@@ -32,9 +32,14 @@ screen for real people. Always, before pushing:
 2. `npm run smoke` — boots the real game in headless Chromium, clicks through
    the title screen, runs the simulation and fails on any page error. Needs
    `npm i -D playwright-core` once. See "The test loop" below.
-3. Look at a screenshot. This is a game; a change that compiles and throws no
+3. `npm run tour` — the same, but it teleports to one example of every biome
+   and every landmark kind it can find, and flies the aeroplane. The smoke test
+   only ever sees the spot you wake up in, and almost nothing in this world is
+   there. Most of what has broken since the world got big broke somewhere else.
+4. Look at a screenshot. This is a game; a change that compiles and throws no
    errors can still be visibly wrong. Several bugs here rendered perfectly
-   cleanly and looked terrible.
+   cleanly and looked terrible. `npm run postcards -- shots/` takes one of each
+   biome in a single browser session.
 
 If you push something that turns out to be broken, revert first and diagnose
 second: `git revert <sha> && git push origin main` puts players back on a
@@ -65,8 +70,14 @@ Two things to know or you will waste an hour:
   world in one call, and it is how wildlife, weather, fire and growth were
   tested.
 
-`window.__game` exposes `engine`, `world`, `cam`, `fps`, `running` and
-`errors` for exactly this.
+`window.__game` exposes `engine`, `world`, `cam`, `fps`, `running`, `errors`
+and `biomeInfo` for exactly this.
+
+`node scripts/survey.mjs [seed]` needs no browser at all: the oracle is pure
+JavaScript, so it samples a hundred-kilometre square in about a second and
+prints the biome shares, the relief histogram and the settlement counts. It is
+by far the cheapest way to answer "are mountains everywhere again?" - use it
+before you spend two minutes on a screenshot.
 
 ## Performance budgets — do not regress these
 
@@ -79,6 +90,14 @@ needs to pay for itself:
 | draw calls | ~250 (up to ~310 in a city) |
 | shaded pixels | ~2.6 M (`defaultPixelRatio()` targets this) |
 | pieces per settlement | 42 000 hard cap |
+| instanced pools on screen | keep empty ones hidden, not merely zero-count |
+
+There are thirty-three plant species and forty-odd animals, one instanced pool
+each, so most pools are empty most of the time - `Pool.commit` hides them rather
+than relying on a zero-instance early-out. Far-distance trees are pooled by
+*silhouette form*, not by species (eight pools, not thirty-three), with the
+species colour and height carried on the instance; that alone was worth a dozen
+draw calls every time the far ring crossed a biome boundary.
 
 Both of the big performance disasters so far came from the same mistake:
 building something correct without asking what it costs at scale. A city
@@ -117,6 +136,28 @@ identical across machines, and meshable by five Web Workers that never talk to
 each other. Only player changes are stored, in `world.edits`, keyed so they
 survive chunks streaming out and back.
 
+**Landform first, then climate, then biome.** A slow field with a wavelength of
+tens of kilometres (`WorldGen.landform`) decides what *kind* of country a region
+is - plain, downs, plateau, karst, sand sea, archipelago, volcanic waste,
+mountain range - and the noise stack is then scaled by it. Mountains need both a
+mountain belt and a high-relief province, which together cover a few per cent of
+the map; that is deliberate, and it is why the world is mostly flat. Temperature
+and moisture are pushed through `rank()` and then through splines authored as
+*quantiles*, so "the coldest twelfth of the world" means exactly that. Vegetation
+is chosen on effective moisture, not rainfall: cold ground keeps far more of what
+falls on it, which is the one line that lets the same two noise fields make both
+a Sahara and a peat bog. If you retune any of this, run `npm run survey` and look
+at the shares before and after.
+
+**Everything people left is made of the same boxes.** `Build` in
+`civilisation.js` owns the destructible-piece machinery; `District` (a
+settlement) and `Outpost` (a farmstead, a lighthouse, a shipwreck, an airstrip)
+both extend it, so anything out in the country burns, collapses and can be
+driven through exactly the way a town house does. What may stand where is
+decided by the oracle in `WorldGen.siteCell`, and it is decided on the local
+biome and slope - there are no tarmac roads in the jungle and no lighthouses
+inland, and keeping it that way is most of what makes the world feel real.
+
 **Everything shares one atmosphere.** One injected shader function gives
 terrain, trees, animals, buildings and debris the same fog, and the CPU
 evaluates the identical model (`Sky._radiance`) for fog colour, light colour,
@@ -125,7 +166,8 @@ water reflection and exposure. Change one, change both, or the horizon splits.
 ```
 src/core/    noise + RNG · renderer, camera, post chain
 src/gfx/     atmosphere injection · procedural materials · particles
-src/world/   worldgen oracle · terrain + worker · sky · weather
+src/world/   biomes (the table of places) · worldgen oracle
+             terrain + worker · sky · weather
              flora · wildlife · civilisation · World (owns update order)
 src/sim/     chemistry (heat, phase change) · fire · physics
 src/player/  input · player body · interaction · inventory
