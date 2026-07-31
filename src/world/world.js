@@ -62,6 +62,10 @@ export class World {
     this.audio = null; // attached by main once the user has interacted
     this.ui = null;
 
+    this._climateT = 0;
+    this._climateTarget = this.wg.seaTemp(spawn.x, spawn.z);
+    atmo.uClimateTemp.value = this._climateTarget;
+
     // A flat plate of water far beyond the streamed chunks, so the ocean
     // reaches the horizon instead of stopping at the edge of the world.
     const disc = new THREE.Mesh(
@@ -101,6 +105,16 @@ export class World {
 
     atmo.uTime.value += dt;
     atmo.uPlayerPos.value.copy(p.position);
+
+    // Follow the region's climate so trees, rocks and roofs cross the snow
+    // line where the ground does. Eased, because walking over a chunk boundary
+    // must not flip a whole hillside white in one frame.
+    this._climateT -= dt;
+    if (this._climateT <= 0) {
+      this._climateT = 0.4;
+      this._climateTarget = this.wg.seaTemp(p.position.x, p.position.z);
+    }
+    atmo.uClimateTemp.value += (this._climateTarget - atmo.uClimateTemp.value) * (1 - Math.exp(-dt * 1.5));
 
     // The far ocean plate follows you and takes the colour of the water you
     // would see at that distance.

@@ -28,6 +28,33 @@ const MOODS = {
   [BIOME.ALPINE]: { scale: 'lydian', root: 52, spread: 1.3, bell: 0.9, pad: 1.1 },
   [BIOME.SCREE]: { scale: 'aeolian', root: 45, spread: 0.9, bell: 0.5, pad: 1.0 },
   [BIOME.MEADOW]: { scale: 'major', root: 50, spread: 1.05, bell: 1.0, pad: 0.8 },
+
+  // The new country. Warmth and openness pick the mode: sand and ice both get
+  // wide, sparse, unresolved scales; wetland and jungle get close ones.
+  [BIOME.MANGROVE]: { scale: 'dorian', root: 43, spread: 0.7, bell: 0.6, pad: 1.0 },
+  [BIOME.SALT_FLAT]: { scale: 'hirajoshi', root: 50, spread: 1.4, bell: 0.35, pad: 0.6 },
+  [BIOME.DUNES]: { scale: 'hirajoshi', root: 47, spread: 1.4, bell: 0.4, pad: 0.65 },
+  [BIOME.ROCKY_DESERT]: { scale: 'minorPent', root: 45, spread: 1.2, bell: 0.45, pad: 0.7 },
+  [BIOME.STEPPE]: { scale: 'minorPent', root: 46, spread: 1.15, bell: 0.55, pad: 0.8 },
+  [BIOME.SHRUBLAND]: { scale: 'dorian', root: 48, spread: 1.0, bell: 0.7, pad: 0.8 },
+  [BIOME.MOOR]: { scale: 'aeolian', root: 44, spread: 0.85, bell: 0.5, pad: 1.0 },
+  [BIOME.BOG]: { scale: 'aeolian', root: 41, spread: 0.65, bell: 0.4, pad: 1.05 },
+  [BIOME.MARSH]: { scale: 'dorian', root: 44, spread: 0.75, bell: 0.6, pad: 0.95 },
+  [BIOME.BAMBOO]: { scale: 'pentatonic', root: 52, spread: 1.1, bell: 1.0, pad: 0.7 },
+  [BIOME.CLOUD_FOREST]: { scale: 'lydian', root: 48, spread: 1.0, bell: 0.85, pad: 1.0 },
+  [BIOME.LAVA_FIELD]: { scale: 'hirajoshi', root: 40, spread: 0.9, bell: 0.3, pad: 1.1 },
+  [BIOME.GLACIER]: { scale: 'hirajoshi', root: 57, spread: 1.3, bell: 0.6, pad: 1.15 },
+  [BIOME.POLAR_DESERT]: { scale: 'aeolian', root: 45, spread: 1.2, bell: 0.35, pad: 1.1 },
+  [BIOME.KARST]: { scale: 'lydian', root: 50, spread: 1.2, bell: 0.95, pad: 0.85 },
+  [BIOME.BADLANDS]: { scale: 'minorPent', root: 43, spread: 1.25, bell: 0.4, pad: 0.85 },
+  [BIOME.PRAIRIE]: { scale: 'pentatonic', root: 49, spread: 1.1, bell: 0.9, pad: 0.75 },
+  [BIOME.OASIS]: { scale: 'lydian', root: 52, spread: 0.9, bell: 1.0, pad: 0.7 },
+  [BIOME.CROPLAND]: { scale: 'major', root: 48, spread: 0.95, bell: 0.8, pad: 0.75 },
+  // A city should feel like held breath: almost no bells, almost no pad.
+  [BIOME.URBAN]: { scale: 'aeolian', root: 40, spread: 0.5, bell: 0.15, pad: 0.5 },
+  [BIOME.KELP]: { scale: 'dorian', root: 42, spread: 0.6, bell: 0.35, pad: 1.0 },
+  [BIOME.DRY_FOREST]: { scale: 'dorian', root: 47, spread: 0.95, bell: 0.7, pad: 0.8 },
+  [BIOME.BLACK_SAND]: { scale: 'aeolian', root: 42, spread: 1.0, bell: 0.4, pad: 1.05 },
 };
 
 const CHORDS = [

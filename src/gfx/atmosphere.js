@@ -23,7 +23,13 @@ export const atmo = {
   uWind: { value: new THREE.Vector2(1, 0) },
   uWindStrength: { value: 0.4 },
   uWetness: { value: 0 },
+  // Fresh snowfall lying on top of everything, 0..1, from the weather.
   uSnowAmount: { value: 0 },
+  // Sea-level air temperature of the region you are standing in. Everything
+  // that can hold snow works out its own permanent cover from this plus its
+  // own altitude, using the identical rule the terrain worker bakes into the
+  // ground colour - which is what stops a snowfield growing green trees.
+  uClimateTemp: { value: 18 },
   uPlayerPos: { value: new THREE.Vector3() },
 };
 
@@ -79,31 +85,85 @@ const WORLDPOS_VERTEX = /* glsl */ `
 #endif
 `;
 
+// Snow lies on whatever faces the sky, so every surface needs to know which
+// way up it is *in the world*. Flat shading throws vNormal away and instanced
+// rocks are rotated arbitrarily, so this is computed here rather than reused.
+const SNOW_VERTEX = /* glsl */ `
+{
+  vec3 wn = normal;
+  #ifdef USE_INSTANCING
+    wn = mat3( instanceMatrix ) * wn;
+  #endif
+  vUpY = normalize( mat3( modelMatrix ) * wn ).y;
+}
+`;
+
+const SNOW_PARS_FRAG = /* glsl */ `
+uniform float uSnowAmount;
+uniform float uClimateTemp;
+varying float vUpY;
+
+/**
+ * Permanent snow cover at a world point, 0..1. Deliberately the same
+ * expression the terrain worker evaluates on the CPU - the same lapse rate,
+ * the same two thresholds - so ground, trees, rocks and roofs all cross the
+ * snow line at the same height on the same hillside.
+ */
+float snowCover( vec3 wp ) {
+  float t = uClimateTemp - max( wp.y, 0.0 ) * 0.0068;
+  float climate = smoothstep( 4.0, -3.0, t );
+  // A soft threshold, not a power curve. The foliage here is chunky low-poly:
+  // a spruce tier is two rings of vertices, so a 1.4-power falloff averaged out
+  // to about a third across every visible face and the tree came out a pale
+  // green instead of a white one. This gives anything not pointing downward a
+  // proper covering and leaves the undersides dark.
+  float up = smoothstep( -0.25, 0.50, vUpY );
+  return clamp( max( climate, uSnowAmount ) * up, 0.0, 1.0 );
+}
+`;
+
+// Snow's albedo really is about 0.8, and this is the linear reflectance the
+// terrain's own SNOW_COL converts to. Matching it exactly is the point.
+const SNOW_FRAGMENT = /* glsl */ `
+  {
+    float snow = snowCover( vWorldPos );
+    diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.85, 0.89, 0.93 ), snow );
+  }
+`;
+
 /**
  * Patch a built-in three material so it participates in the shared
  * atmosphere. Optionally inject extra vertex/fragment code (used by foliage
  * for wind, and by terrain for its palette tweaks).
  */
 export function injectAtmosphere(material, opts = {}) {
+  // The terrain bakes its snow per vertex on the CPU (it knows the real local
+  // temperature, not just the player's) and clouds have no up-facing side, so
+  // both opt out.
+  const wantSnow = opts.snow !== false;
   const prevCompile = material.onBeforeCompile;
   material.onBeforeCompile = (shader, renderer) => {
     if (prevCompile) prevCompile(shader, renderer);
     Object.assign(shader.uniforms, atmo, opts.uniforms || {});
 
     shader.vertexShader = shader.vertexShader
-      .replace('#include <fog_pars_vertex>', `varying vec3 vWorldPos;\n${opts.vertexPars || ''}`)
-      .replace('#include <project_vertex>', (opts.vertexBody || '') + WORLDPOS_VERTEX);
+      .replace('#include <fog_pars_vertex>',
+        `varying vec3 vWorldPos;\n${wantSnow ? 'varying float vUpY;\n' : ''}${opts.vertexPars || ''}`)
+      .replace('#include <project_vertex>',
+        (opts.vertexBody || '') + WORLDPOS_VERTEX + (wantSnow ? SNOW_VERTEX : ''));
 
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <fog_pars_fragment>', ATMO_PARS + (opts.fragmentPars || ''))
+      .replace('#include <fog_pars_fragment>',
+        ATMO_PARS + (wantSnow ? SNOW_PARS_FRAG : '') + (opts.fragmentPars || ''))
       .replace(
         '#include <fog_fragment>',
         `${opts.fragmentBody || ''}\n  gl_FragColor.rgb = atmoApply( gl_FragColor.rgb, vWorldPos, cameraPosition );`
       );
-    if (opts.colorFragment) {
+    const colorFrag = (wantSnow ? SNOW_FRAGMENT : '') + (opts.colorFragment || '');
+    if (colorFrag) {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <color_fragment>',
-        '#include <color_fragment>\n' + opts.colorFragment
+        '#include <color_fragment>\n' + colorFrag
       );
     }
     if (opts.emissiveFragment) {

@@ -168,7 +168,7 @@ function quadruped(L, sp) {
   const legY = sp.legs;
   const c = sp.col;
   const dark = mul(c, 0.55);
-  const pale = mul(c, 1.5, 0.06);
+  const pale = sp.belly || mul(c, 1.5, 0.06);
   const yB = legY + by;
 
   // Torso: deep chest, tucked waist, round rump. A camel gets its hump from
@@ -182,12 +182,35 @@ function quadruped(L, sp) {
     { col: c, colBelly: pale, sx: bx / by, seg: 10 }
   );
 
-  // Neck and head, one limb so the graze/alert dip moves them together.
+  // A mane along the crest of the neck and shoulders. Cheap, and it is the
+  // whole difference between a horse and a donkey - or a lion and a big cat.
+  if (sp.mane) {
+    L.blade(
+      [[0, yB + by * 0.9, bz * 0.7], [0, yB + by * 1.0, bz * 0.1], [0, yB + by * 0.85, -bz * 0.3]],
+      [by * 0.5, by * 0.55, by * 0.3],
+      { col: mul(c, 0.55), sx: 0.16, sy: 1.0, seg: 5 }
+    );
+  }
+  // A shaggy fleece: a second, lumpier skin over the torso.
+  if (sp.fleece) {
+    L.spine(
+      [[0, yB + by * 0.1, -bz * 0.85], [0, yB + by * 0.16, 0], [0, yB + by * 0.1, bz * 0.8]],
+      [by * 1.12, by * 1.22, by * 1.02],
+      { col: mul(c, 1.15, 0.03), sx: bx / by, seg: 7 }
+    );
+  }
+
+  // Neck and head, one limb so the graze/alert dip moves them together. A
+  // giraffe is the same rig with the neck turned up to two metres.
   const headPivot = [0, yB, bz * 0.7];
   const nTop = [0, yB + sp.neck, bz * 0.95 + sp.neck * 0.22];
+  const longNeck = sp.neck > by * 2.2;
   L.spine(
-    [[0, yB + by * 0.1, bz * 0.62], [0, yB + sp.neck * 0.55, bz * 0.8], nTop],
-    [by * 0.52, by * 0.4, by * 0.36],
+    longNeck
+      ? [[0, yB + by * 0.1, bz * 0.62], [0, yB + sp.neck * 0.35, bz * 0.74],
+         [0, yB + sp.neck * 0.7, bz * 0.86], nTop]
+      : [[0, yB + by * 0.1, bz * 0.62], [0, yB + sp.neck * 0.55, bz * 0.8], nTop],
+    longNeck ? [by * 0.52, by * 0.36, by * 0.30, by * 0.26] : [by * 0.52, by * 0.4, by * 0.36],
     { col: c, colBelly: pale, limb: 5, pivot: headPivot, seg: 8 }
   );
   const hz = nTop[2];
@@ -203,7 +226,40 @@ function quadruped(L, sp) {
     L.ball(s * bx * 0.3, hy + by * 0.16, hz + bz * 0.2, by * 0.09, [0.02, 0.02, 0.025], { limb: 5, pivot: headPivot });
   }
 
-  if (sp.ears || sp.antlers || sp.horns || true) {
+  // A trunk hangs from the head and swings with it.
+  if (sp.trunk) {
+    L.spine(
+      [[0, hy - by * 0.1, hz + bz * 0.5], [0, hy - by * 0.7, hz + bz * 0.62],
+       [0, hy - by * 1.5, hz + bz * 0.5], [0, hy - by * 2.0, hz + bz * 0.66]],
+      [by * 0.20, by * 0.16, by * 0.11, by * 0.07],
+      { col: c, limb: 5, pivot: headPivot, seg: 7 }
+    );
+  }
+  // A long soft snout - tapir, hippo, crocodile.
+  if (sp.snout) {
+    L.spine(
+      [[0, hy - by * 0.05, hz + bz * 0.45], [0, hy - by * 0.14, hz + bz * 0.95]],
+      [by * 0.30, by * 0.20],
+      { col: c, colBelly: pale, limb: 5, pivot: headPivot, seg: 7 }
+    );
+  }
+  if (sp.bigEars) {
+    for (const s of [-1, 1]) {
+      L.blade(
+        [[s * bx * 0.34, hy + by * 0.15, hz - by * 0.05], [s * bx * 1.15, hy + by * 0.05, hz - by * 0.75]],
+        [by * 0.45, by * 0.62],
+        { col: mul(c, 0.85), limb: 5, pivot: headPivot, sy: 0.10, seg: 5 }
+      );
+    }
+  }
+  if (sp.shell) {
+    L.spine(
+      [[0, yB + by * 0.2, -bz * 0.7], [0, yB + by * 0.55, 0], [0, yB + by * 0.2, bz * 0.6]],
+      [bz * 0.72, bz * 0.95, bz * 0.7],
+      { col: mul(c, 0.7), sx: 1.15, sy: 0.55, seg: 8 }
+    );
+  }
+  if (!sp.trunk && !sp.bigEars) {
     // Almost everything has ears; rabbits get tall ones.
     const eh = sp.ears ? by * 1.5 : by * 0.55;
     for (const s of [-1, 1]) {
@@ -251,7 +307,14 @@ function quadruped(L, sp) {
 
   // Tail.
   const tailPivot = [0, yB, -bz];
-  if (sp.bushyTail) {
+  if (sp.longTail) {
+    L.spine(
+      [[0, yB + by * 0.35, -bz * 0.95], [0, yB + by * 0.3, -bz * 1.9],
+       [0, yB + by * 0.15, -bz * 2.7], [0, yB + by * 0.05, -bz * 3.2]],
+      [by * 0.26, by * 0.19, by * 0.12, by * 0.05],
+      { col: c, colBelly: pale, limb: 6, pivot: tailPivot, seg: 6 }
+    );
+  } else if (sp.bushyTail) {
     L.spine(
       [[0, yB + by * 0.3, -bz * 0.95], [0, yB + by * 0.34, -bz * 1.5], [0, yB + by * 0.16, -bz * 1.95]],
       [by * 0.22, by * 0.38, by * 0.16],
@@ -264,6 +327,23 @@ function quadruped(L, sp) {
       [by * 0.14, by * 0.06],
       { col: dark, limb: 6, pivot: tailPivot, seg: 5 }
     );
+  }
+
+  // Flippered species have no legs to speak of: four short paddles instead.
+  if (sp.flippers) {
+    let fid = 1;
+    for (const sz of [1, -1]) {
+      for (const sx2 of [-1, 1]) {
+        const hip = [sx2 * bx * 0.7, legY + by * 0.2, sz * bz * 0.5];
+        L.blade(
+          [hip, [sx2 * bx * 1.7, legY * 0.4, sz * bz * 0.5 - bz * 0.15]],
+          [by * 0.3, by * 0.14],
+          { col: mul(c, 0.85), limb: fid, pivot: hip, sy: 0.22, seg: 5 }
+        );
+        fid++;
+      }
+    }
+    return;
   }
 
   // Legs: two segments; the shader swings 1-4 from the hip and folds 9-12 at
@@ -379,10 +459,89 @@ function swimmer(L, sp) {
   }
 }
 
+/**
+ * A two-legged standing body: penguin, ostrich, kangaroo. Same rig, but the
+ * torso is vertical and only limbs 1 and 3 exist, which the shader already
+ * swings in antiphase - so it walks without a single line of new shader.
+ */
+function biped(L, sp) {
+  const [bx, by, bz] = sp.body;
+  const legY = sp.legs;
+  const c = sp.col;
+  const pale = sp.belly || mul(c, 1.6, 0.08);
+  const yB = legY;
+
+  // Upright torso: tall, egg-shaped, pale down the front.
+  L.spine(
+    [[0, yB, 0], [0, yB + by * 0.9, 0], [0, yB + by * 1.7, 0]],
+    [by * 0.72, by * 1.0, by * 0.62],
+    { col: c, colBelly: pale, sx: bx / by, seg: 9 }
+  );
+  // Countershading runs down the front of a standing bird, not underneath it,
+  // so the belly panel is a separate slab rather than a normal-driven blend.
+  L.spine(
+    [[0, yB + by * 0.2, bz * 0.42], [0, yB + by * 1.3, bz * 0.36]],
+    [by * 0.5, by * 0.34],
+    { col: pale, sx: (bx / by) * 0.8, sy: 0.34, seg: 7 }
+  );
+
+  const headPivot = [0, yB + by * 1.7, 0];
+  const nTop = [0, yB + by * 1.7 + sp.neck, bz * 0.12];
+  L.spine(
+    [[0, yB + by * 1.6, 0], [0, yB + by * 1.7 + sp.neck * 0.55, bz * 0.06], nTop],
+    [by * 0.38, by * 0.26, by * 0.24],
+    { col: c, limb: 5, pivot: headPivot, seg: 7 }
+  );
+  L.ball(0, nTop[1] + by * 0.18, nTop[2], by * 0.34, c, { limb: 5, pivot: headPivot, seg: 7 });
+  L.spine(
+    [[0, nTop[1] + by * 0.14, nTop[2] + by * 0.3], [0, nTop[1] + by * 0.08, nTop[2] + by * 0.8]],
+    [by * 0.14, by * 0.03],
+    { col: [0.72, 0.56, 0.20], limb: 5, pivot: headPivot, seg: 5 }
+  );
+  for (const s of [-1, 1]) {
+    L.ball(s * bx * 0.4, nTop[1] + by * 0.26, nTop[2] + by * 0.18, by * 0.09, [0.02, 0.02, 0.025],
+      { limb: 5, pivot: headPivot });
+  }
+
+  // Stubby arms or flippers, hung off the wing limbs so they beat gently.
+  for (const s of [-1, 1]) {
+    const wp = [s * bx * 0.7, yB + by * 1.2, 0];
+    L.blade(
+      [wp, [s * bx * 1.05, yB + by * 0.35, -bz * 0.1]],
+      [by * 0.34, by * 0.14],
+      { col: mul(c, 0.8), limb: s < 0 ? 8 : 7, pivot: wp, sy: 0.16, seg: 5 }
+    );
+  }
+
+  if (sp.longTail) {
+    const tp = [0, yB, -bz * 0.3];
+    L.spine(
+      [[0, yB + by * 0.1, -bz * 0.4], [0, yB * 0.5, -bz * 1.6], [0, yB * 0.15, -bz * 2.6]],
+      [by * 0.34, by * 0.22, by * 0.08],
+      { col: c, colBelly: pale, limb: 6, pivot: tp, seg: 6 }
+    );
+  }
+
+  // Two legs, ids 1 and 3 so the shader swings them in antiphase.
+  for (const [id, sx2] of [[1, -1], [3, 1]]) {
+    const hip = [sx2 * bx * 0.5, legY, 0];
+    const knee = [sx2 * bx * 0.5, legY * 0.45, 0];
+    L.spine([hip, knee], [bx * 0.26, bx * 0.15],
+      { col: c, limb: id, pivot: hip, seg: 6, capStart: false });
+    L.spine([[knee[0], knee[1], knee[2]], [knee[0], legY * 0.06, knee[2] + bz * 0.05]],
+      [bx * 0.14, bx * 0.11],
+      { col: mul(c, 0.7), limb: id + 8, pivot: hip, pivot2: knee, seg: 5, capStart: false });
+    L.spine([[knee[0], legY * 0.07, knee[2] + bz * 0.05], [knee[0], 0.005, knee[2] + bz * 0.3]],
+      [bx * 0.12, bx * 0.10],
+      { col: mul(c, 0.5), limb: id + 8, pivot: hip, pivot2: knee, seg: 4, capStart: false });
+  }
+}
+
 export function buildAnimal(sp) {
   const L = new SmoothLimbs();
   if (sp.gait === 2) swimmer(L, sp); // GAIT.SWIM
   else if (sp.gait === 1) bird(L, sp); // GAIT.FLY
+  else if (sp.upright) biped(L, sp);
   else quadruped(L, sp);
   return L.geometry();
 }

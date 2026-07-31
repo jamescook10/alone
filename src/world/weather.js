@@ -263,7 +263,10 @@ export class Weather {
     atmo.uWind.value.copy(this.windDir);
     atmo.uWindStrength.value = this.wind;
     atmo.uWetness.value = this.wetness;
-    atmo.uSnowAmount.value = Math.max(this.snowCover, smoothstep(1.5, -3.0, localTemp) * 0.7);
+    // Only what has actually fallen. Permanent snow - the line up a mountain,
+    // the white of a tundra - now comes from uClimateTemp, which every
+    // material evaluates against its own altitude.
+    atmo.uSnowAmount.value = this.snowCover;
     // When the auto-quality ladder pulls the far plane in, thicker fog hides
     // the cut instead of showing sky through the missing horizon.
     const farK = this.world.engine.quality.farK || 1;

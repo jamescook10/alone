@@ -5,7 +5,7 @@ import { World } from './world/world.js';
 import { Input } from './player/input.js';
 import { UI } from './ui/hud.js';
 import { Audio } from './audio/audio.js';
-import { WorldGen } from './world/worldgen.js';
+import { WorldGen, BIOME_INFO } from './world/worldgen.js';
 import { clamp } from './core/noise.js';
 import { loadAssets } from './gfx/assets.js';
 
@@ -265,6 +265,9 @@ function escapeHtml(s) {
 
 window.__game = {
   get engine() { return engine; },
+  // The biome table, so the headless scripts can name a place without
+  // importing the module graph a second time.
+  biomeInfo: BIOME_INFO,
   get world() { return world; },
   get cam() { return engine && engine.camera; },
   get frame() { return frame; },

@@ -157,8 +157,8 @@ export class Interaction {
     if (p.vehicle) {
       this.target = { kind: 'driving', vehicle: p.vehicle };
       const v = p.vehicle;
-      this.prompt = `<kbd>F</kbd> step out · <kbd>W/S</kbd> drive · <kbd>Space</kbd> brake${v.blade ? ' · <kbd>B</kbd> blade' : ''} · <kbd>H</kbd> horn`;
-      this.secondary = `${(Math.abs(v.speed) * 3.6).toFixed(0)} km/h · fuel ${v.tank.litres.toFixed(0)}L`;
+      this.prompt = v.controls();
+      this.secondary = v.readout();
       return;
     }
 
@@ -249,7 +249,9 @@ export class Interaction {
 
     switch (t.kind) {
       case 'vehicle':
-        this.prompt = `<kbd>E</kbd> get into the ${t.vehicle.kind}`;
+        this.prompt = t.vehicle.kind === 'plane'
+          ? `<kbd>E</kbd> climb into the aeroplane`
+          : `<kbd>E</kbd> get ${t.vehicle.kind === 'boat' ? 'aboard the boat' : 'into the ' + t.vehicle.kind}`;
         this.secondary = t.vehicle.tank.litres > 0.5
           ? `${t.vehicle.tank.litres.toFixed(0)}L of petrol left`
           : 'the tank is dry';
@@ -359,7 +361,11 @@ export class Interaction {
         const v = t.vehicle;
         p.vehicle = v;
         v.start();
-        w.note(`You climbed into the ${v.kind}.`, 'event');
+        w.note(v.kind === 'plane'
+          ? 'You climbed into the aeroplane.'
+          : v.kind === 'boat'
+            ? 'You stepped aboard the boat.'
+            : `You climbed into the ${v.kind}.`, 'event');
         return;
       }
       case 'door':
