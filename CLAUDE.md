@@ -136,6 +136,28 @@ identical across machines, and meshable by five Web Workers that never talk to
 each other. Only player changes are stored, in `world.edits`, keyed so they
 survive chunks streaming out and back.
 
+**A region has to feel like one place.** This is a harder constraint than
+variety, and the first version of the big world failed it badly: a ten-kilometre
+walk moved you 13 °C on average and up to 60 at worst, only a third of that walk
+was in any one biome, and twenty-six different kinds of country sat within
+10 km. Forty biomes are worth nothing if you cross six of them on the way to the
+river - there is nothing left to travel for. The climate and province fields are
+now roughly an order of magnitude slower, and `npm run survey` prints the
+numbers that matter. Keep them near these:
+
+| | target |
+|---|---|
+| air temperature change over a 10 km walk | ~4 °C median, under 10 at the 90th |
+| share of a 10 km walk in one biome | 70%+ |
+| kinds of country within 10 km | 3-5 |
+| distance before a 15 °C change | 50 km+ median |
+| kinds of country within 150 km | 20+ |
+
+The last two lines are the point: the variety is all still there, it is just far
+enough away to be worth going to. Local interest inside a region comes from
+things the player can *see the reason for* - altitude and its lapse rate, rivers
+and lakes, the coast, the landform province - not from the climate flickering.
+
 **Landform first, then climate, then biome.** A slow field with a wavelength of
 tens of kilometres (`WorldGen.landform`) decides what *kind* of country a region
 is - plain, downs, plateau, karst, sand sea, archipelago, volcanic waste,
@@ -147,7 +169,13 @@ and moisture are pushed through `rank()` and then through splines authored as
 is chosen on effective moisture, not rainfall: cold ground keeps far more of what
 falls on it, which is the one line that lets the same two noise fields make both
 a Sahara and a peat bog. If you retune any of this, run `npm run survey` and look
-at the shares before and after.
+at both the shares *and* the coherence block before and after.
+
+The small high-frequency term added to each climate field is not a second
+climate - it is ±1 °C over a few hundred metres, and its only job is to fray the
+edge wherever a threshold happens to fall, so a boundary is a mottled band a few
+hundred metres wide instead of a drawn line. Four fifths of boundaries interleave
+that way. Raise its amplitude and you get the old flickering world back.
 
 **Everything people left is made of the same boxes.** `Build` in
 `civilisation.js` owns the destructible-piece machinery; `District` (a

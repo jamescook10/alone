@@ -55,9 +55,11 @@ const spots = await page.evaluate(([wantB, wantS]) => {
   const seenB = new Set();
   const seenS = new Set();
   const s = {};
+  // Reaches out well past a hundred kilometres: a sand sea and a glacier are
+  // not neighbours any more, and that is the point.
   for (let i = 0; i < 60000 && (seenB.size < wantB.length || seenS.size < wantS.length); i++) {
     const a = i * 2.399963;
-    const r = 120 * Math.sqrt(i);
+    const r = 520 * Math.sqrt(i);
     const x = Math.cos(a) * r;
     const z = Math.sin(a) * r;
     wg.sample(x, z, s);

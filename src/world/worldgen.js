@@ -178,28 +178,28 @@ export class WorldGen {
     const n = this.n;
     // Warp the province fields hard so their boundaries are ragged coastline
     // shapes rather than the smooth blobs of raw fbm.
-    const wx = x + n.lfw.fbm2(x * 0.0000232 + 4.1, z * 0.0000232 - 2.7, 2) * 5200;
-    const wz = z + n.lfw.fbm2(x * 0.0000232 - 9.3, z * 0.0000232 + 6.5, 2) * 5200;
+    const wx = x + n.lfw.fbm2(x * 0.0000068 + 4.1, z * 0.0000068 - 2.7, 2) * 14000;
+    const wz = z + n.lfw.fbm2(x * 0.0000068 - 9.3, z * 0.0000068 + 6.5, 2) * 14000;
 
     // Relief. fbm is roughly gaussian about 0.5; this curve throws away the
     // bottom third and then squares what is left, so the median province has
     // relief 0.05 - genuinely flat - and only the top couple of per cent are
     // mountains. That single line is why the world stopped being all peaks.
-    const r0 = n.relief.fbm2(wx * 0.0000355, wz * 0.0000355, 3) * 0.5 + 0.5;
+    const r0 = n.relief.fbm2(wx * 0.0000095, wz * 0.0000095, 3) * 0.5 + 0.5;
     const relief = Math.pow(saturate((r0 - 0.30) / 0.70), 2.4);
 
     // Hilliness is independent of relief, so you get flat country inside a
     // mountain province (a valley floor) and rolling downs with no mountains
     // anywhere near them.
-    const h0 = n.hilly.fbm2(wx * 0.000078 + 11.3, wz * 0.000078 - 4.4, 3) * 0.5 + 0.5;
+    const h0 = n.hilly.fbm2(wx * 0.000038 + 11.3, wz * 0.000038 - 4.4, 3) * 0.5 + 0.5;
     const hill = smoothstep(0.34, 0.80, h0);
 
     // One "style" field picks between the exotic landforms, so a region is a
     // sand sea or a karst or a lava field - never a muddle of all three.
-    const st = n.style.fbm2(wx * 0.0000455 - 21.7, wz * 0.0000455 + 13.9, 3) * 0.5 + 0.5;
+    const st = n.style.fbm2(wx * 0.0000125 - 21.7, wz * 0.0000125 + 13.9, 3) * 0.5 + 0.5;
     const band = (lo, hi) => smoothstep(lo, lo + 0.04, st) * smoothstep(hi, hi - 0.04, st);
 
-    const isl = n.isle.fbm2(wx * 0.0000615 + 7.7, wz * 0.0000615 - 3.1, 2) * 0.5 + 0.5;
+    const isl = n.isle.fbm2(wx * 0.000030 + 7.7, wz * 0.000030 - 3.1, 2) * 0.5 + 0.5;
 
     const out = {
       relief,
@@ -339,9 +339,19 @@ export class WorldGen {
     // Sahara. `rank` flattens it into an even [0,1] and the splines below then
     // say, explicitly and in quantiles, what fraction of the world should be
     // how cold and how wet.
-    const tSea = spline(TEMP_SPLINE, rank(n.temp.fbm2(x * 0.000058, z * 0.000058, 3))) +
-      3.0 * n.temp.fbm2(x * 0.00042, z * 0.00042, 2);
-    let moist = spline(MOIST_SPLINE, rank(n.moist.fbm2(x * 0.00014, z * 0.00014, 4)));
+    // Climate belts are continental. At the frequencies this used to run at,
+    // a ten-kilometre walk moved you 13 °C on average and up to 60 at worst -
+    // you crossed every climate on Earth in half an hour and there was nothing
+    // left to travel for. These are roughly six times slower, so where you are
+    // is a place rather than a coincidence.
+    //
+    // The second, fine term is not a second climate: it is small and short so
+    // it only frays the edge where a threshold happens to fall, which is what
+    // keeps a boundary a mottled band instead of a drawn line.
+    const tSea = spline(TEMP_SPLINE, rank(n.temp.fbm2(x * 0.0000042, z * 0.0000042, 2))) +
+      1.0 * n.temp.fbm2(x * 0.0014, z * 0.0014, 2);
+    let moist = saturate(spline(MOIST_SPLINE, rank(n.moist.fbm2(x * 0.0000085, z * 0.0000085, 2)))
+      + 0.035 * n.moist.fbm2(x * 0.0019, z * 0.0019, 2));
     // Coasts are wetter than continental interiors.
     moist = saturate(moist + smoothstep(0.15, -0.25, cont) * 0.16);
 
@@ -1375,7 +1385,10 @@ const CONT_SPLINE = [
  * of the world" means the coldest twelfth.
  */
 function rank(f) {
-  return 1 / (1 + Math.exp(-5.87 * f));
+  // Calibrated for the two-octave fbm the climate fields use, which measures
+  // sd 0.332. (A three-octave one is 0.292 - if you change the octave count,
+  // re-measure, or the quantiles the splines below promise stop being true.)
+  return 1 / (1 + Math.exp(-5.13 * f));
 }
 
 // Sea-level temperature by quantile. 8% of the world is polar, 18% boreal,

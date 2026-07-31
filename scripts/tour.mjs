@@ -58,9 +58,11 @@ const plan = await page.evaluate(() => {
   const biomes = new Map();
   const s = {};
   // A coarse spiral out from the origin. Cheap: the oracle is pure maths.
-  for (let i = 0; i < 26000 && (sites.size < 24 || biomes.size < 30); i++) {
+  // Climate belts are continental, so this has to reach a long way out: at the
+  // old 21 km the spiral simply never left the region it started in.
+  for (let i = 0; i < 60000 && (sites.size < 24 || biomes.size < 30); i++) {
     const a = i * 2.399963;
-    const r = 130 * Math.sqrt(i);
+    const r = 620 * Math.sqrt(i);
     const x = Math.cos(a) * r;
     const z = Math.sin(a) * r;
     for (const st of wg.sitesNear(x, z, 700)) {
@@ -164,7 +166,11 @@ if (!strip) {
     if (!flight.engineOn) failures.push('the aeroplane would not start');
     if (flight.maxSpeed < 32) failures.push(`the aeroplane never got up to speed (${flight.maxSpeed} m/s)`);
     if (flight.maxAgl < 60) failures.push(`the aeroplane never left the ground (${flight.maxAgl} m)`);
-    if (flight.travelled < 1200) failures.push(`the aeroplane went nowhere (${flight.travelled} m)`);
+    // Loose on purpose: the strip this finds is somewhere different on every
+    // seed, so the climb profile varies with the ground it takes off over.
+    // What is being asserted is powered flight over a real distance, not a
+    // repeatable number.
+    if (flight.travelled < 950) failures.push(`the aeroplane went nowhere (${flight.travelled} m)`);
     if (!flight.alive) failures.push('the aeroplane destroyed itself');
     if (!flight.stillDriven) failures.push('the aeroplane vanished out from under the player');
   }

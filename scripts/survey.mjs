@@ -66,6 +66,66 @@ for (let i = 0; i < 5; i++) {
 }
 console.log(`  land ${((land / total) * 100).toFixed(0)}% · altitude ${minH.toFixed(0)}..${maxH.toFixed(0)} m · mean slope ${(sumSlope / Math.max(1, land)).toFixed(3)}`);
 
+/* ------------------------------------------------------------- coherence */
+
+// The measurements that decide whether the player feels they are *somewhere*.
+// A world can hold forty biomes and still be worthless to explore if you cross
+// six of them on the way to the river. What matters is how far you have to go
+// before the country genuinely changes.
+{
+  const tempPer10 = [];
+  const domFrac = [];
+  const nearKinds = [];
+  const toDifferent = [];
+
+  for (let k = 0; k < 160; k++) {
+    const a = k * 0.9137;
+    const r = 4000 + k * 300;
+    const x0 = Math.cos(a) * r;
+    const z0 = Math.sin(a) * r;
+    const dir = a + 1.1;
+    wg.sample(x0, z0, s);
+    const t0 = s.temperature;
+
+    // How much does the air change over a ten-kilometre walk?
+    wg.sample(x0 + Math.cos(dir) * 10000, z0 + Math.sin(dir) * 10000, s);
+    tempPer10.push(Math.abs(s.temperature - t0));
+
+    // ...and how far before it is a different world altogether?
+    let d = 0;
+    for (; d < 400000; d += 500) {
+      wg.sample(x0 + Math.cos(dir) * d, z0 + Math.sin(dir) * d, s);
+      if (Math.abs(s.temperature - t0) > 15) break;
+    }
+    toDifferent.push(d);
+
+    // Over that same walk, how much of it is one kind of country?
+    const counts = new Map();
+    let onLand = 0;
+    for (let w = 0; w < 10000; w += 25) {
+      wg.sample(x0 + Math.cos(dir) * w, z0 + Math.sin(dir) * w, s);
+      if (s.height < 1) continue;
+      onLand++;
+      counts.set(s.biome, (counts.get(s.biome) || 0) + 1);
+    }
+    if (onLand > 100) {
+      domFrac.push(Math.max(...counts.values()) / onLand);
+      // Only count a biome that holds a real share of the ground: one sample
+      // caught in the fringe of a boundary is not a place you can go to.
+      nearKinds.push([...counts.values()].filter((v) => v / onLand >= 0.03).length);
+    }
+  }
+
+  const at = (arr, q) => arr.slice().sort((a, b) => a - b)[Math.floor(arr.length * q)];
+  const km = (v) => (v / 1000).toFixed(0) + ' km';
+  console.log('\ncoherence — does it feel like one place?');
+  console.log(`  air temperature change over a 10 km walk   median ${at(tempPer10, 0.5).toFixed(1)} °C · 90th pct ${at(tempPer10, 0.9).toFixed(1)} °C`);
+  console.log(`  share of that walk in one biome            median ${(at(domFrac, 0.5) * 100).toFixed(0)}%`);
+  console.log(`  kinds of country within 10 km             median ${at(nearKinds, 0.5)}`);
+  console.log(`  distance before a 15 °C change            median ${km(at(toDifferent, 0.5))} · 10th pct ${km(at(toDifferent, 0.1))}`);
+  console.log(`  ...which on foot is about ${(at(toDifferent, 0.5) / 5 / 3600).toFixed(1)} hours, or ${(at(toDifferent, 0.5) / 46 / 60).toFixed(0)} minutes in the aeroplane`);
+}
+
 /* -------------------------------------------------------- what people built */
 
 const towns = wg.townsNear(0, 0, half * 1.4);
