@@ -211,22 +211,23 @@ src/ui/      hud, journal, settings
 
 ## House style
 
-- Assets are **baked, not hand-made, and not fetched at run time**. The owner
-  lifted the original no-assets rule to get a polished look: trees are now
-  generated offline by `scripts/bake-trees.mjs` (ez-tree, MIT) into
-  `public/assets/`, with their textures vendored from the same MIT package —
-  see `public/assets/trees/LICENSE.md`. **The game currently loads nothing at
-  run time at all** — the flat-shaded restyle stopped it reading the tree
-  pack, and taking the third-person camera out took the player's animated
-  body with it. `loadAssets` is a stub over a pack kept on disk for
-  reference; wire it back up if a baked look ever returns.
-  The world is still procedurally *placed* and everything still works
-  (procedural fallbacks) if the assets fail to load. Keep new assets CC0/MIT,
-  keep the pack a few MB, and prefer bake scripts over checked-in binaries
-  wherever possible so the "generated world" spirit survives.
-- Budgets for baked trees: ~600–1100 triangles near, ~60–100 far. The near
-  ring holds hundreds of full-detail trees at once; `Flora._retier` demotes
-  chunks past ~200 m to the far pools, so both numbers matter.
+- **The game ships no assets and loads none.** There is no `public/`, no
+  runtime loader, and every request a player makes is the HTML, the JS, the
+  CSS and the terrain worker — about 250 KB gzipped. It got back to that in
+  two steps: the flat-shaded restyle stopped anything reading the baked tree
+  and terrain packs, and taking the third-person camera out took the player's
+  animated body with it. The packs then sat in the deploy for a while being
+  downloaded by nobody, and were deleted.
+- The bake scripts stay, and they are the canonical form: `bake-trees.mjs`
+  (ez-tree, MIT) and `bake-terrain.mjs` regenerate their packs into
+  `public/assets/` from nothing but a command, vendoring their own licence
+  files as they go. If a baked look ever returns, run them and write a loader
+  again. Prefer that to checked-in binaries — a derived artifact in the repo
+  is one nobody can tell is stale, and the "generated world" spirit survives
+  the script far better than it survives the output.
+- Budgets, if baked trees ever come back: ~600–1100 triangles near, ~60–100
+  far. The near ring holds hundreds of full-detail trees at once; the far
+  pools start past ~200 m, so both numbers matter.
 - Comments explain *why*, especially where a number was tuned or a trap was
   avoided. Do not narrate what the code already says.
 - Commit messages: what changed and what it fixes, with the measurement if
