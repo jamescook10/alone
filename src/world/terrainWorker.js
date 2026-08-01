@@ -26,7 +26,136 @@ self.onmessage = (e) => {
       self.postMessage({ type: 'error', id: msg.id, message: String(err && err.stack || err) });
     }
   }
+  if (msg.type === 'horizon') {
+    try {
+      const result = buildHorizon(msg);
+      self.postMessage({ type: 'horizon', ...result.payload }, result.transfer);
+    } catch (err) {
+      self.postMessage({ type: 'error', id: 'horizon', message: String(err && err.stack || err) });
+    }
+  }
 };
+
+/* ----------------------------------------------------------------- horizon */
+
+/**
+ * The landscape beyond the streamed quadtree, as a single silhouette ring.
+ *
+ * A polar annulus of quickSample()d heights: no rivers, no settlements, no
+ * scatter - at fifteen kilometres a mountain range is a shape in the haze and
+ * that is all it needs to be. One draw call, a few thousand triangles, and it
+ * shares the terrain material so the atmosphere can never split at the seam.
+ */
+function buildHorizon(req) {
+  const { cx, cz, rIn, rOut, azi, rings } = req;
+  const nVerts = azi * rings;
+  const positions = new Float32Array(nVerts * 3);
+  const normals = new Float32Array(nVerts * 3);
+  const colors = new Float32Array(nVerts * 3);
+  const aux = new Float32Array(nVerts * 4);
+  const s = {};
+
+  // Log-spaced rings: fine where the silhouette meets the real terrain,
+  // coarse out where a whole fell is a couple of pixels.
+  const radii = new Float64Array(rings);
+  for (let k = 0; k < rings; k++) {
+    radii[k] = rIn * Math.pow(rOut / rIn, k / (rings - 1));
+  }
+
+  const heights = new Float32Array(nVerts);
+  const temps = new Float32Array(nVerts);
+  const biomes = new Uint8Array(nVerts);
+  for (let k = 0; k < rings; k++) {
+    const r = radii[k];
+    for (let i = 0; i < azi; i++) {
+      const a = (i / azi) * Math.PI * 2;
+      wg.quickSample(cx + Math.cos(a) * r, cz + Math.sin(a) * r, s);
+      const v = k * azi + i;
+      heights[v] = s.height;
+      temps[v] = s.temperature;
+      biomes[v] = s.biome;
+    }
+  }
+
+  for (let k = 0; k < rings; k++) {
+    const r = radii[k];
+    const rd = radii[Math.min(k + 1, rings - 1)] - radii[Math.max(k - 1, 0)];
+    for (let i = 0; i < azi; i++) {
+      const v = k * azi + i;
+      const a = (i / azi) * Math.PI * 2;
+      const h = heights[v];
+      // Anything under the sea ducks below the horizon plate, and the wall
+      // this drops at the coastline reads as the coast from this far away.
+      const sea = h < SEA_LEVEL + 0.5;
+      // Earth curvature: r²/2R sinks far ranges below the horizon the way
+      // they really do - and, at the inner edge, it guarantees the real
+      // streamed terrain wins wherever the two briefly overlap.
+      const drop = (r * r) / (2 * 6371000);
+      positions[v * 3] = Math.cos(a) * r;
+      positions[v * 3 + 1] = (sea ? -8 : h) - drop;
+      positions[v * 3 + 2] = Math.sin(a) * r;
+
+      // Slope from the polar neighbours, for the rock band and the snow line.
+      const iN = k * azi + (i + 1) % azi;
+      const iP = k * azi + (i - 1 + azi) % azi;
+      const kN = Math.min(k + 1, rings - 1) * azi + i;
+      const kP = Math.max(k - 1, 0) * azi + i;
+      const da = (Math.PI * 2 / azi) * r * 2;
+      const gx = (heights[iN] - heights[iP]) / da;
+      const gz = (heights[kN] - heights[kP]) / Math.max(rd, 1);
+      const ny = 1 / Math.sqrt(1 + gx * gx + gz * gz);
+      const slope = 1 - ny;
+      normals[v * 3] = 0;
+      normals[v * 3 + 1] = 1;
+      normals[v * 3 + 2] = 0;
+
+      const info = BIOME_INFO[biomes[v]];
+      let cr, cg, cb;
+      if (sea) {
+        // Hidden under the sea plate; dark silt in case a sliver ever shows.
+        cr = 0.01; cg = 0.025; cb = 0.035;
+      } else {
+        cr = (info.col[0] + info.col2[0]) * 0.5;
+        cg = (info.col[1] + info.col2[1]) * 0.5;
+        cb = (info.col[2] + info.col2[2]) * 0.5;
+        const rockCol = info.rock || ROCK_COL;
+        const rock = smoothstep(0.46, 0.60, slope);
+        cr = lerp(cr, rockCol[0], rock);
+        cg = lerp(cg, rockCol[1], rock);
+        cb = lerp(cb, rockCol[2], rock);
+        // Same snow rule as the near ground, so the snow line carries on
+        // across the seam instead of stopping at fifteen kilometres.
+        const snow = smoothstep(4.0, -3.0, temps[v]) * (1 - smoothstep(0.35, 0.75, slope));
+        cr = lerp(cr, SNOW_COL[0], snow);
+        cg = lerp(cg, SNOW_COL[1], snow);
+        cb = lerp(cb, SNOW_COL[2], snow);
+        aux[v * 4 + 3] = snow;
+      }
+      colors[v * 3] = cr;
+      colors[v * 3 + 1] = cg;
+      colors[v * 3 + 2] = cb;
+      aux[v * 4 + 1] = slope;
+    }
+  }
+
+  const indices = new Uint32Array((rings - 1) * azi * 6);
+  let t = 0;
+  for (let k = 0; k < rings - 1; k++) {
+    for (let i = 0; i < azi; i++) {
+      const a = k * azi + i;
+      const c = k * azi + (i + 1) % azi;
+      const d = (k + 1) * azi + (i + 1) % azi;
+      const b = (k + 1) * azi + i;
+      indices[t++] = a; indices[t++] = c; indices[t++] = d;
+      indices[t++] = a; indices[t++] = d; indices[t++] = b;
+    }
+  }
+
+  return {
+    payload: { cx, cz, positions, normals, colors, aux, indices },
+    transfer: [positions.buffer, normals.buffer, colors.buffer, aux.buffer, indices.buffer],
+  };
+}
 
 /* ------------------------------------------------------------------- build */
 

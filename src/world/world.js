@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { WorldGen } from './worldgen.js';
 import { Terrain } from './terrain.js';
+import { Horizon } from './horizon.js';
 import { Sky } from './sky.js';
 import { Weather } from './weather.js';
 import { Clouds } from './clouds.js';
@@ -57,6 +58,7 @@ export class World {
 
     const spawn = opts.spawn || this.wg.findSpawn();
     this.player = new Player(this, spawn);
+    this.horizon = new Horizon(this);
     this.interaction = new Interaction(this);
 
     this.audio = null; // attached by main once the user has interacted
@@ -86,6 +88,7 @@ export class World {
 
     this.player.update(dt);
     this.terrain.update(p.position);
+    this.horizon.update();
     this.weather.update(dt, p);
     this.sky.update(dt, this.engine.camera, this.weather);
     // Shadows track the ground under the player, not the player: flying at
@@ -164,5 +167,6 @@ export class World {
 
   dispose() {
     this.terrain.dispose();
+    this.horizon.dispose();
   }
 }

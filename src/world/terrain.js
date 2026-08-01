@@ -281,7 +281,19 @@ export class Terrain {
   _pump() {
     if (!this.queue.length) return;
     // Nearest (lowest LOD index) first so the ground under your feet is
-    // always the first thing to appear.
+    // always the first thing to appear. Distances were stamped when a node
+    // was queued and go stale as you move - on foot that hardly matters, but
+    // flying it meant chunks behind you meshed before the ones you were
+    // heading into. Refresh them against where the camera is now.
+    const cp = this._lastUpdatePos;
+    if (cp) {
+      for (const n of this.queue) {
+        if (n.dead) continue;
+        const dx = cp.x - (n.x + n.size / 2);
+        const dz = cp.z - (n.z + n.size / 2);
+        n.priority = n.lod * 1e6 + Math.min(Math.sqrt(dx * dx + dz * dz) | 0, 999999);
+      }
+    }
     this.queue.sort((a, b) => a.priority - b.priority);
     for (let i = 0; i < this.workers.length && this.queue.length; i++) {
       if (this.workerBusy[i]) continue;

@@ -751,7 +751,21 @@ class Pool {
       geo.setAttribute('aTint', this.tint);
     }
     this.dirty = false;
+    // Touched-slot range since the last commit, kept separately for the
+    // matrix and the growth attributes. Uploading only this slice matters:
+    // the grass pool's matrices alone are over five megabytes, and walking
+    // through a forest used to re-send all of it whenever any slot changed.
+    this._mLo = Infinity; this._mHi = -1;
+    this._gLo = Infinity; this._gHi = -1;
     scene.add(this.mesh);
+  }
+  _touchM(i) {
+    if (i < this._mLo) this._mLo = i;
+    if (i > this._mHi) this._mHi = i;
+  }
+  _touchG(i) {
+    if (i < this._gLo) this._gLo = i;
+    if (i > this._gHi) this._gHi = i;
   }
   /** Packed allocation: instances always occupy [0, count). */
   alloc(owner) {
@@ -777,14 +791,17 @@ class Pool {
   _copy(from, to) {
     const m = this.mesh.instanceMatrix.array;
     for (let k = 0; k < 16; k++) m[to * 16 + k] = m[from * 16 + k];
+    this._touchM(to);
     if (this.birth) {
       this.birth.array[to] = this.birth.array[from];
       this.rate.array[to] = this.rate.array[from];
       for (let k = 0; k < 3; k++) this.tint.array[to * 3 + k] = this.tint.array[from * 3 + k];
+      this._touchG(to);
     }
   }
   setMatrix(i, m) {
     m.toArray(this.mesh.instanceMatrix.array, i * 16);
+    this._touchM(i);
     this.dirty = true;
   }
   setGrowth(i, birth, rate, tr, tg, tb) {
@@ -794,6 +811,7 @@ class Pool {
     this.tint.array[i * 3] = tr;
     this.tint.array[i * 3 + 1] = tg;
     this.tint.array[i * 3 + 2] = tb;
+    this._touchG(i);
     this.dirty = true;
   }
   commit() {
@@ -802,12 +820,28 @@ class Pool {
     // of the shadow pass instead of relying on a zero-instance early-out.
     this.mesh.visible = this.mesh.count > 0;
     if (!this.dirty) return;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.birth) {
+    // One update range spanning the touched slots. A single ripened fruit
+    // used to cost the whole buffer; now it costs sixty-four bytes.
+    if (this._mHi >= this._mLo) {
+      const im = this.mesh.instanceMatrix;
+      im.clearUpdateRanges();
+      im.addUpdateRange(this._mLo * 16, (this._mHi - this._mLo + 1) * 16);
+      im.needsUpdate = true;
+    }
+    if (this.birth && this._gHi >= this._gLo) {
+      const n = this._gHi - this._gLo + 1;
+      this.birth.clearUpdateRanges();
+      this.birth.addUpdateRange(this._gLo, n);
       this.birth.needsUpdate = true;
+      this.rate.clearUpdateRanges();
+      this.rate.addUpdateRange(this._gLo, n);
       this.rate.needsUpdate = true;
+      this.tint.clearUpdateRanges();
+      this.tint.addUpdateRange(this._gLo * 3, n * 3);
       this.tint.needsUpdate = true;
     }
+    this._mLo = Infinity; this._mHi = -1;
+    this._gLo = Infinity; this._gHi = -1;
     this.dirty = false;
   }
 }
@@ -1371,16 +1405,26 @@ export class Flora {
     this._retierT = (this._retierT || 0) - dt;
     if (this._retierT > 0) return;
     this._retierT = 0.7;
+    // Still one rebuild per tick to spread the cost - but the *nearest* one,
+    // not the first in Map order. Map order is load order, and taking that
+    // used to promote a chunk off to the side while the trees straight ahead
+    // of you stayed silhouettes for several more seconds.
+    let best = null;
+    let bestD = Infinity;
     for (const entry of this.chunks.values()) {
       const node = entry.node;
       if (node.lod !== 0 || !node.scatter) continue;
       const d = this._chunkDist(node);
       const want = entry.far ? d > 170 : d > 220;
-      if (want !== entry.far) {
-        this.onChunkUnloaded(node);
-        this.onChunkLoaded(node, node.scatter);
-        break; // one rebuild per tick spreads the cost
+      if (want === entry.far) continue;
+      if (d < bestD) {
+        bestD = d;
+        best = node;
       }
+    }
+    if (best) {
+      this.onChunkUnloaded(best);
+      this.onChunkLoaded(best, best.scatter);
     }
   }
 
