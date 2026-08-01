@@ -687,6 +687,17 @@ const FAR = {
  */
 const FAR_FORMS = ['round', 'conifer', 'palm', 'column', 'flat', 'tuft', 'bare', 'fat'];
 
+// Sized per form, not one number for all eight. Three of them carry most of
+// the world - 'round' is every broadleaf, 'conifer' every needle tree, 'tuft'
+// every bush, fern and sward plant - and a flat 7000 each ran those three dry
+// from the air while the other five sat nearly empty. That starvation is why
+// whole hillsides of pale broadleaf trees used to appear only once you were
+// almost on top of them.
+const FAR_CAP = {
+  round: 24000, conifer: 24000, tuft: 24000,
+  palm: 8000, column: 8000, flat: 8000, bare: 8000, fat: 8000,
+};
+
 // Relative to the tinted foliage colour. A far trunk is two pixels of darker
 // something underneath a canopy, and that is all it ever needs to be.
 const FAR_TRUNK = [0.55, 0.48, 0.40];
@@ -775,6 +786,10 @@ class Pool {
   _touchG(i) {
     if (i < this._gLo) this._gLo = i;
     if (i > this._gHi) this._gHi = i;
+  }
+  /** Slots still available. Emphatically not `free`, which removes one. */
+  headroom() {
+    return this.capacity - this.mesh.count;
   }
   /** Packed allocation: instances always occupy [0, count). */
   alloc(owner) {
@@ -911,7 +926,7 @@ export class Flora {
     // of oaks used to appear only when you were nearly on top of them.
     this.farPools = {};
     for (const form of FAR_FORMS) {
-      const pool = new Pool(buildFarForm(form, world.seed), this.leafMat, 16000, this.scene);
+      const pool = new Pool(buildFarForm(form, world.seed), this.leafMat, FAR_CAP[form], this.scene);
       pool.mesh.castShadow = false;
       this.farPools[form] = pool;
     }
@@ -1023,21 +1038,30 @@ export class Flora {
 
   /* ------------------------------------------------------------- streaming */
 
-  /** Distance from the player to the nearest edge of a chunk. */
+  /**
+   * Distance from the player to the nearest part of a chunk, in three
+   * dimensions. Height counts: from three hundred metres up the ground below
+   * you is three hundred metres away, and full-detail trees on it are wasted
+   * geometry - worse, ignoring altitude meant the whole near ring stayed
+   * full-detail while flying, which is exactly where the budget is tightest.
+   */
   _chunkDist(node) {
-    const p = this.world.player ? this.world.player.position : { x: 0, z: 0 };
+    const p = this.world.player ? this.world.player.position : { x: 0, y: 0, z: 0 };
     const dx = Math.max(node.x - p.x, 0, p.x - (node.x + node.size));
     const dz = Math.max(node.z - p.z, 0, p.z - (node.z + node.size));
-    return Math.hypot(dx, dz);
+    const dy = Math.max(0, p.y - (node.maxY || 0));
+    return Math.hypot(dx, dz, dy);
   }
 
-  onChunkLoaded(node, scatter, fade = true) {
+  onChunkLoaded(node, scatter, fade = true, forceFar = null) {
     const entry = {
       node,
       // Only the ring you can actually walk through gets full geometry -
       // and with baked trees that ring is priced by distance, not just LOD:
-      // a full quadtree leaf can still be 250m away.
-      far: node.lod >= 1 || this._chunkDist(node) > 195,
+      // a full quadtree leaf can still be 250m away. A retier passes the tier
+      // it already checked the pools against, so the answer cannot drift
+      // between the check and the allocation.
+      far: forceFar !== null ? forceFar : (node.lod >= 1 || this._chunkDist(node) > 195),
       // Freshly streamed chunks scale their instances in over half a second;
       // a retier rebuild swaps like-for-like and must arrive full-size.
       fade,
@@ -1263,17 +1287,47 @@ export class Flora {
     }
   }
 
+  /**
+   * Release every slot this chunk owns: grouped by pool, highest slot first.
+   *
+   * `Pool.free` is a swap-remove - it moves the pool's last instance down into
+   * the freed slot and tells that instance's owner where it went. Freeing in
+   * allocation order meant that whenever the moved instance belonged to *this*
+   * chunk, the slot list being iterated was rewritten under the loop to a slot
+   * already released, and it was then freed a second time. That drove the
+   * pool's count below zero (a flight showed palm at -7 and tuft at -13) and
+   * scrambled every instance above it. Descending order cannot move one of our
+   * own slots into another of our own, because the higher one is always gone
+   * first; clearing the records before freeing makes the callback a no-op too.
+   */
   onChunkUnloaded(node) {
     const entry = this.chunks.get(node);
     if (!entry) return;
-    for (const p of entry.plants) this._freePlant(entry, p);
-    for (const s of entry.rocks) this.rockPool.free(s);
-    entry.rockSrc = null;
-    entry.rockAt = null;
-    for (const s of entry.grass) this.grassPool.free(s);
+    const byPool = new Map();
+    const add = (pool, slot) => {
+      if (!pool || slot < 0) return;
+      let a = byPool.get(pool);
+      if (!a) byPool.set(pool, (a = []));
+      a.push(slot);
+    };
+    for (const p of entry.plants) {
+      const [bp, lp] = this._poolsFor(p);
+      add(bp, p.slotBark);
+      add(lp, p.slotLeaf);
+      add(this.fruitPool, p.slotFruit);
+      p.slotBark = p.slotLeaf = p.slotFruit = -1;
+    }
+    for (const s of entry.rocks) add(this.rockPool, s);
+    for (const s of entry.grass) add(this.grassPool, s);
     entry.plants.length = 0;
     entry.rocks.length = 0;
     entry.grass.length = 0;
+    entry.rockSrc = null;
+    entry.rockAt = null;
+    for (const [pool, slots] of byPool) {
+      slots.sort((a, b) => b - a);
+      for (const s of slots) pool.free(s);
+    }
     this.chunks.delete(node);
   }
 
@@ -1442,16 +1496,56 @@ export class Flora {
    * rebuilding from the scatter the node still holds. Hysteresis (170/220)
    * keeps a chunk from thrashing at the boundary.
    */
+  /**
+   * Whether the pools could actually stock this chunk at the given tier.
+   *
+   * A retier frees the chunk's slots and immediately asks for new ones, so if
+   * the destination pool is full the trees simply vanish and only come back on
+   * a later retry - which is what "trees disappear and pop in again" was. The
+   * chunk's own slots come back to their pools when it is freed, so they count
+   * toward what is available.
+   */
+  _canStock(entry, far) {
+    const need = new Map();
+    const back = new Map();
+    const bump = (m, k, n) => k && m.set(k, (m.get(k) || 0) + n);
+    for (const p of entry.plants) {
+      const [bp, lp] = this._poolsFor(p);
+      if (p.slotBark >= 0) bump(back, bp, 1);
+      if (p.slotLeaf >= 0) bump(back, lp, 1);
+      bump(need, far ? this.farPools[FAR[p.sp][0]] : this.barkPools[p.sp], 1);
+      if (!far) bump(need, this.leafPools[p.sp], 1);
+    }
+    // Ground cover counts too. It is tier-independent, so a demotion always
+    // breaks even on it - but a chunk that went short of *grass* must not be
+    // rebuilt over and over on the off-chance, which is what happens if the
+    // starved flag is set by a pool this check does not know about.
+    const sc = entry.node.scatter;
+    if (sc) {
+      bump(need, this.rockPool, sc.rocks.length / 8);
+      bump(need, this.grassPool, sc.grass.length / 7);
+    }
+    bump(back, this.rockPool, entry.rocks.length);
+    bump(back, this.grassPool, entry.grass.length);
+    for (const [pool, n] of need) {
+      if (pool.headroom() + (back.get(pool) || 0) < n) return false;
+    }
+    return true;
+  }
+
   _retier(dt) {
     this._retierT = (this._retierT || 0) - dt;
     if (this._retierT > 0) return;
-    this._retierT = 0.7;
+    // Landing turns a whole ring of far chunks into near ones at once, so a
+    // strict one-per-second would take half a minute to dress the ground.
+    this._retierT = 0.45;
     // Still one rebuild per tick to spread the cost - but the *nearest* one,
     // not the first in Map order. Map order is load order, and taking that
     // used to promote a chunk off to the side while the trees straight ahead
     // of you stayed silhouettes for several more seconds.
     let best = null;
     let bestD = Infinity;
+    let bestFar = false;
     // Starved chunks (a pool ran dry while stocking them) get a second look
     // once tier work is done - nearest first, so freed slots always land on
     // the barest chunk in front of you, not on whatever streams in next.
@@ -1464,23 +1558,26 @@ export class Flora {
       const d = this._chunkDist(node);
       if (node.lod === 0) {
         const want = entry.far ? d > 170 : d > 220;
-        if (want !== entry.far) {
-          if (d < bestD) {
-            bestD = d;
-            best = node;
-          }
+        if (want !== entry.far && d < bestD && this._canStock(entry, want)) {
+          bestD = d;
+          bestFar = want;
+          best = node;
           continue;
         }
       }
-      if (entry.starved && now - entry.starveRetry > 2.5 && d < starvedD) {
+      if (entry.starved && now - entry.starveRetry > 2.5 && d < starvedD
+        && this._canStock(entry, entry.far)) {
         starvedD = d;
         starved = node;
       }
     }
-    if (!best) best = starved;
+    if (!best) {
+      best = starved;
+      if (starved) bestFar = this.chunks.get(starved).far;
+    }
     if (best) {
       this.onChunkUnloaded(best);
-      this.onChunkLoaded(best, best.scatter, false);
+      this.onChunkLoaded(best, best.scatter, false, bestFar);
       const fresh = this.chunks.get(best);
       if (fresh) fresh.starveRetry = now;
     }

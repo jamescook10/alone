@@ -120,16 +120,11 @@ function buildHorizon(req) {
         cr = (info.col[0] + info.col2[0]) * 0.5;
         cg = (info.col[1] + info.col2[1]) * 0.5;
         cb = (info.col[2] + info.col2[2]) * 0.5;
-        // The same painted canopy the far chunks wear, so a forested range
-        // does not change colour where the streamed terrain hands over.
-        const density = info.trees * (0.55 + moists[v] * 0.9);
-        if (density > 0.05) {
-          const canopy = Math.min(0.62, density * 0.55);
-          const warm = smoothstep(3, 13, temps[v]);
-          cr = lerp(cr, lerp(CANOPY_COLD[0], CANOPY_WARM[0], warm), canopy);
-          cg = lerp(cg, lerp(CANOPY_COLD[1], CANOPY_WARM[1], warm), canopy);
-          cb = lerp(cb, lerp(CANOPY_COLD[2], CANOPY_WARM[2], warm), canopy);
-        }
+        // The same painted canopy the streamed chunks wear, on the same
+        // channel, so a forested range does not change colour at the seam.
+        const canopy = canopyCover(
+          cx + Math.cos(a) * r, cz + Math.sin(a) * r, info, moists[v]);
+        aux[v * 4 + 2] = canopy;
         const rockCol = info.rock || ROCK_COL;
         const rock = smoothstep(0.46, 0.60, slope);
         cr = lerp(cr, rockCol[0], rock);
@@ -137,7 +132,8 @@ function buildHorizon(req) {
         cb = lerp(cb, rockCol[2], rock);
         // Same snow rule as the near ground, so the snow line carries on
         // across the seam instead of stopping at fifteen kilometres.
-        const snow = smoothstep(4.0, -3.0, temps[v]) * (1 - smoothstep(0.35, 0.75, slope));
+        const snow = smoothstep(4.0, -3.0, temps[v])
+          * (1 - smoothstep(0.35, 0.75, slope)) * (1 - canopy * 0.6);
         cr = lerp(cr, SNOW_COL[0], snow);
         cg = lerp(cg, SNOW_COL[1], snow);
         cb = lerp(cb, SNOW_COL[2], snow);
@@ -259,7 +255,6 @@ function build(req) {
       GC.water = gwater[gi]; GC.river = griver[gi];
       GC.road = groad[gi]; GC.surface = gsurf[gi]; GC.town = gtown[gi];
       GC.rail = grail[gi]; GC.farm = gfarm[gi]; GC.dune = gdune[gi];
-      GC.lod = lod;
       groundColor(GC, col, MATW);
       colors[vi * 3] = col[0];
       colors[vi * 3 + 1] = col[1];
@@ -269,8 +264,11 @@ function build(req) {
       const wet = wl > -9999 ? saturate((wl - h + 1.2) / 2.4) : saturate(1 - Math.abs(h - SEA_LEVEL) / 1.8) * 0.5;
       aux[vi * 4] = wet;
       aux[vi * 4 + 1] = slope;
-      aux[vi * 4 + 2] = MATW[0];
-      aux[vi * 4 + 3] = MATW[1];
+      // z carries the painted canopy cover. The old sand/snow splat weights
+      // that used to live in z and w died with the texture set; nothing has
+      // read them since, and the canopy needs somewhere to ride.
+      aux[vi * 4 + 2] = canopyCover(wx, wz, BIOME_INFO[gbiome[gi]], gmoist[gi]);
+      aux[vi * 4 + 3] = MATW[0];
     }
   }
 
@@ -363,23 +361,33 @@ function build(req) {
 
 /* ------------------------------------------------------------ ground colour */
 
-const MATW = [0, 0]; // sand, snow weights for the texture splat
+// Snow weight, handed back out for the aux channel the shader reads. The sand
+// weight that used to sit beside it went with the texture splat.
+const MATW = [0];
 // One reused argument bag: this runs once per terrain vertex and a fourteen
 // argument call signature was already unreadable before the railways arrived.
 const GC = {
   x: 0, z: 0, h: 0, biome: 0, temp: 0, moist: 0, slope: 0, water: 0,
-  river: 0, road: 0, surface: 0, town: 0, rail: 0, farm: 0, dune: 0, lod: 0,
+  river: 0, road: 0, surface: 0, town: 0, rail: 0, farm: 0, dune: 0,
 };
 
-// Distant forest is painted onto the ground. Instanced trees stop at the
-// lod<=1 ring (about a kilometre), and beyond it a forested hill used to be
-// bare green - so flying showed naked squares that suddenly grew trees.
-// From that far away a forest is its canopy seen from above, which is just a
-// colour: dark blue-green where it is cold conifer country, warmer where it
-// is broadleaf. The near ring keeps clean ground because the real trees
-// standing on it already darken it.
-const CANOPY_COLD = [s2l(0.24), s2l(0.38), s2l(0.29)];
-const CANOPY_WARM = [s2l(0.34), s2l(0.52), s2l(0.29)];
+/**
+ * How much canopy covers this point, 0..1 - the painted stand-in for the
+ * instanced trees, which only exist within about a kilometre.
+ *
+ * Baked per vertex on *every* chunk and blended in by camera distance in the
+ * fragment shader, deliberately not gated on LOD: keying it to the chunk made
+ * the join between two LODs a hard square of darker green in the middle
+ * distance. It is a pure function of world position, so the same point gets
+ * the same cover whichever LOD samples it, and only the two long wavelengths
+ * survive the 21 m vertex spacing of a far chunk without aliasing.
+ */
+function canopyCover(x, z, info, moist) {
+  const density = info.trees * (0.55 + moist * 0.9);
+  if (density <= 0.05) return 0;
+  const mot = hashNoise(x * 0.0045, z * 0.0045) * 0.7 + hashNoise(x * 0.009, z * 0.009) * 0.3;
+  return Math.min(0.62, density * 0.55) * smoothstep(0.15, 0.6, mot + density * 0.2);
+}
 
 // Flat-look overlays, authored in sRGB pastels and converted once. Biomes may
 // override the rock and the sand - red rock in badlands, black sand under a
@@ -405,13 +413,7 @@ function groundColor(c, out, matw) {
   const { x, z, h, biome, temp, slope } = c;
   const info = BIOME_INFO[biome];
 
-  if (matw) {
-    // The sand splat is for anything that reads as loose grains.
-    matw[0] = (biome === BIOME.DESERT || biome === BIOME.DUNES || biome === BIOME.BEACH ||
-      biome === BIOME.SALT_FLAT || biome === BIOME.BLACK_SAND)
-      ? 1 - smoothstep(0.30, 0.60, slope) : 0;
-    matw[1] = 0;
-  }
+  if (matw) matw[0] = 0;
 
   // Two-tone base quantised to three flat steps: large clean patches of
   // colour instead of continuous mottle - the flat-illustration look.
@@ -428,21 +430,10 @@ function groundColor(c, out, matw) {
     r += k * 0.10; g += k * 0.085; b += k * 0.05;
   }
 
-  // Painted canopy past the instanced-tree ring; ragged at the wood's edge,
-  // solid in the deep forest, and damping the snow lerp below keeps a snowy
+  // The canopy colour itself is applied in the shader, where it can fade with
+  // camera distance. Here it only damps the snow lerp, which keeps a snowy
   // taiga stippled dark the way real conifer country looks from the air.
-  let canopy = 0;
-  if (c.lod >= 2) {
-    const density = info.trees * (0.55 + c.moist * 0.9);
-    if (density > 0.05) {
-      const mot = hashNoise(x * 0.0045, z * 0.0045) * 0.7 + hashNoise(x * 0.019, z * 0.019) * 0.3;
-      canopy = Math.min(0.62, density * 0.55) * smoothstep(0.15, 0.6, mot + density * 0.2);
-      const warm = smoothstep(3, 13, temp);
-      r = lerp(r, lerp(CANOPY_COLD[0], CANOPY_WARM[0], warm), canopy);
-      g = lerp(g, lerp(CANOPY_COLD[1], CANOPY_WARM[1], warm), canopy);
-      b = lerp(b, lerp(CANOPY_COLD[2], CANOPY_WARM[2], warm), canopy);
-    }
-  }
+  const canopy = canopyCover(x, z, info, c.moist);
 
   // Steep ground shows rock, over a narrow band so the edge stays clean.
   const rockCol = info.rock || ROCK_COL;
@@ -459,7 +450,7 @@ function groundColor(c, out, matw) {
   // carries snowy trees and snowy roofs instead of green ones.
   const snowLine = smoothstep(4.0, -3.0, temp);
   const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope)) * (1 - canopy * 0.6);
-  if (matw) matw[1] = snow;
+  if (matw) matw[0] = snow;
   if (snow > 0.01) {
     r = lerp(r, SNOW_COL[0], snow);
     g = lerp(g, SNOW_COL[1], snow);
@@ -472,7 +463,6 @@ function groundColor(c, out, matw) {
     if (d > -1.6) {
       const sandCol = info.sand || SAND_COL;
       const shore = smoothstep(0.25, 0.75, saturate(1 - Math.abs(d) / 2.2));
-      if (matw) matw[0] = Math.max(matw[0], shore);
       r = lerp(r, sandCol[0], shore * 0.8);
       g = lerp(g, sandCol[1], shore * 0.8);
       b = lerp(b, sandCol[2], shore * 0.8);

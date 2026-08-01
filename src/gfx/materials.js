@@ -62,6 +62,13 @@ export function blobTexture(softness = 0.55, seed = 3) {
 
 /* ---------------------------------------------------------- terrain */
 
+// The colour a forest canopy takes seen from above: near-black blue-green in
+// cold conifer country, a warmer green where broadleaf grows. Authored in
+// sRGB and converted once, like every other reflectance in the game.
+const CANOPY_COLD = new THREE.Color().setRGB(0.24, 0.38, 0.29, THREE.SRGBColorSpace);
+const CANOPY_WARM = new THREE.Color().setRGB(0.34, 0.52, 0.29, THREE.SRGBColorSpace);
+const v3 = (c) => `vec3( ${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)} )`;
+
 export function makeTerrainMaterial() {
   const mat = new THREE.MeshLambertMaterial({
     vertexColors: true,
@@ -83,6 +90,7 @@ export function makeTerrainMaterial() {
     fragmentPars: /* glsl */ `
       uniform float uWetness;
       uniform float uSnowAmount;
+      uniform float uClimateTemp;
       varying vec4 vAux;
     `,
     colorFragment: /* glsl */ `
@@ -90,6 +98,24 @@ export function makeTerrainMaterial() {
         // Rain darkens the ground; puddled shorelines (vAux.x) stay darker.
         float wet = clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
         diffuseColor.rgb *= mix( 1.0, 0.72, wet * 0.8 );
+
+        // Painted forest canopy (vAux.z), faded in by camera distance.
+        //
+        // Instanced trees only exist within about a kilometre, so past that a
+        // wooded hill was bare green until you flew close enough for the trees
+        // to appear on it. This paints the canopy onto the ground instead, and
+        // it fades by *distance* rather than by chunk LOD - keying it to the
+        // chunk turned every LOD boundary into a hard square of darker green.
+        // Where the two overlap the paint reads as the shade under the trees.
+        float canopy = vAux.z * smoothstep( 240.0, 900.0, distance( vWorldPos, cameraPosition ) );
+        if ( canopy > 0.002 ) {
+          // Same lapse rate the snow line uses, so a mountainside darkens into
+          // conifer at the height its trees actually change.
+          float ct = uClimateTemp - max( vWorldPos.y, 0.0 ) * 0.0068;
+          diffuseColor.rgb = mix( diffuseColor.rgb,
+            mix( ${v3(CANOPY_COLD)}, ${v3(CANOPY_WARM)}, smoothstep( 3.0, 13.0, ct ) ), canopy );
+        }
+
         // Fresh snowfall whitens flat ground.
         float snow = clamp( uSnowAmount * ( 1.0 - vAux.y * 1.3 ), 0.0, 1.0 );
         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.86, 0.89, 0.94 ), snow * 0.9 );
