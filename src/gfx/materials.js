@@ -65,8 +65,12 @@ export function blobTexture(softness = 0.55, seed = 3) {
 // The colour a forest canopy takes seen from above: near-black blue-green in
 // cold conifer country, a warmer green where broadleaf grows. Authored in
 // sRGB and converted once, like every other reflectance in the game.
-const CANOPY_COLD = new THREE.Color().setRGB(0.24, 0.38, 0.29, THREE.SRGBColorSpace);
-const CANOPY_WARM = new THREE.Color().setRGB(0.34, 0.52, 0.29, THREE.SRGBColorSpace);
+// Deliberately much darker than the ground they sit on. Measured, the first
+// version differed from forest ground by only 16-19 sRGB levels, which reads
+// as a faint stain rather than as woodland; a real canopy seen from the air is
+// roughly half the luminance of open pasture.
+const CANOPY_COLD = new THREE.Color().setRGB(0.13, 0.22, 0.17, THREE.SRGBColorSpace);
+const CANOPY_WARM = new THREE.Color().setRGB(0.19, 0.32, 0.17, THREE.SRGBColorSpace);
 const v3 = (c) => `vec3( ${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)} )`;
 
 export function makeTerrainMaterial() {
@@ -92,6 +96,22 @@ export function makeTerrainMaterial() {
       uniform float uSnowAmount;
       uniform float uClimateTemp;
       varying vec4 vAux;
+
+      // Value noise on floats only. The CPU's hash3f cannot be ported here as
+      // it stands: its constants exceed INT_MAX, and an out-of-range integer
+      // literal is an error in GLSL ES 3.00. This never has to agree with the
+      // CPU - nothing else reads it - so a float hash is the safe choice.
+      float chash( vec2 p ) {
+        return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+      }
+      float cnoise( vec2 p ) {
+        vec2 i = floor( p );
+        vec2 f = fract( p );
+        vec2 u = f * f * ( 3.0 - 2.0 * f );
+        return mix(
+          mix( chash( i ), chash( i + vec2( 1.0, 0.0 ) ), u.x ),
+          mix( chash( i + vec2( 0.0, 1.0 ) ), chash( i + vec2( 1.0, 1.0 ) ), u.x ), u.y );
+      }
     `,
     colorFragment: /* glsl */ `
       {
@@ -99,21 +119,46 @@ export function makeTerrainMaterial() {
         float wet = clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
         diffuseColor.rgb *= mix( 1.0, 0.72, wet * 0.8 );
 
-        // Painted forest canopy (vAux.z), faded in by camera distance.
+        // Painted forest canopy, faded in by camera distance.
         //
-        // Instanced trees only exist within about a kilometre, so past that a
-        // wooded hill was bare green until you flew close enough for the trees
-        // to appear on it. This paints the canopy onto the ground instead, and
-        // it fades by *distance* rather than by chunk LOD - keying it to the
-        // chunk turned every LOD boundary into a hard square of darker green.
-        // Where the two overlap the paint reads as the shade under the trees.
-        float canopy = vAux.z * smoothstep( 240.0, 900.0, distance( vWorldPos, cameraPosition ) );
+        // Instanced trees stop about 2.5 km out, so past that a wooded hill has
+        // to be painted. vAux.z carries the smooth cover fraction; every scrap
+        // of STRUCTURE is generated here, per pixel.
+        //
+        // That split is the whole point. The first version baked the mottle
+        // into the vertices, and the vertex spacing that samples it runs from
+        // 4 m near to 43 m at lod 3 and 368 m on the horizon ring - so it
+        // averaged away to a flat wash exactly where it was needed. Measured,
+        // it delivered a mean of -21/255 green with a spatial deviation of 5,
+        // which does not read as forest: a lerp toward one colour pulls the
+        // clearings down as hard as it darkens the wood, and it actually CUT
+        // frame contrast from 15.7 to 12.2. A threshold mask cannot do that -
+        // it leaves the clearings alone and only darkens where trees stand.
+        float cd = distance( vWorldPos, cameraPosition );
+        // Starts well inside the instanced ring on purpose. Where real trees are
+          // drawn this reads as the shade they cast on the ground; where they
+          // have thinned out it takes over as the trees themselves. Beginning it
+          // at the far ring instead left a visibly paler band around the player.
+          float canopy = vAux.z * smoothstep( 150.0, 620.0, cd );
         if ( canopy > 0.002 ) {
-          // Same lapse rate the snow line uses, so a mountainside darkens into
-          // conifer at the height its trees actually change.
+          vec2 wp = vWorldPos.xz;
+          // Stands, then clumps within a stand, then individual crowns. The
+          // finest octave fades out past 3 km, where it would alias.
+          float n = cnoise( wp * 0.0045 ) * 0.55
+                  + cnoise( wp * 0.019 ) * 0.28
+                  + cnoise( wp * 0.075 ) * 0.17 * ( 1.0 - smoothstep( 1200.0, 3000.0, cd ) );
+          // A mask, not a wash: below the threshold the ground stays exactly
+          // as it was, so clearings, tracks and rock keep their own colour.
+          float m = smoothstep( 0.52 - canopy * 0.62, 0.92 - canopy * 0.62, n );
           float ct = uClimateTemp - max( vWorldPos.y, 0.0 ) * 0.0068;
-          diffuseColor.rgb = mix( diffuseColor.rgb,
-            mix( ${v3(CANOPY_COLD)}, ${v3(CANOPY_WARM)}, smoothstep( 3.0, 13.0, ct ) ), canopy );
+          vec3 cc = mix( ${v3(CANOPY_COLD)}, ${v3(CANOPY_WARM)}, smoothstep( 3.0, 13.0, ct ) );
+          // Sunlit crowns against shaded gaps. Without this the mask is still
+          // a flat colour, just a lumpy one - and it is the light falling on
+          // one side of a wood that says "trees" at four kilometres.
+          float lit = 0.5 + 0.5 * dot( normalize( vec3(
+            cnoise( wp * 0.019 + 7.3 ) - n, 0.55, cnoise( wp * 0.019 - 3.1 ) - n ) ), uSunDir );
+          cc *= 0.80 + 0.55 * lit;
+          diffuseColor.rgb = mix( diffuseColor.rgb, cc, m * min( 1.0, canopy * 1.55 ) );
         }
 
         // Fresh snowfall whitens flat ground.

@@ -87,25 +87,38 @@ await page.evaluate(() => {
 
 const rows = [];
 for (const alt of [2, 280, 600]) {
-  const r = await page.evaluate((alt) => {
+  // Drive the world in batches with real waits between them. A single long
+  // synchronous loop never yields, so the terrain workers cannot deliver and
+  // the coarse rings never arrive - the measurement then describes a world
+  // that is still streaming rather than a settled one.
+  for (let k = 0; k < 10; k++) {
+    await page.evaluate((alt) => {
+      const w = window.__game.world;
+      const p = w.player.position;
+      const hold = w.__holdY || (w.__holdY = w.terrain.heightAt(p.x, p.z) + alt);
+      p.y = hold;
+      w.terrain.update(p, true);
+      for (let i = 0; i < 60; i++) {
+        w.update(0.033);
+        p.y = hold;
+        w.player.velocity.set(0, 0, 0);
+      }
+    }, alt);
+    await page.waitForTimeout(1200);
+  }
+  const r = await page.evaluate(() => {
     const g = window.__game;
     const w = g.world;
     const p = w.player.position;
-    const hold = w.terrain.heightAt(p.x, p.z) + alt;
-    p.y = hold;
-    w.terrain.update(p, true);
-    // Pin the altitude - gravity would drop the player back to the ground
-    // long before the retier had worked through the ring.
-    for (let i = 0; i < 400; i++) {
-      w.update(0.033);
-      p.y = hold;
-      w.player.velocity.set(0, 0, 0);
-    }
+    w.__holdY = undefined;
     let near = 0;
     let far = 0;
-    for (const e of w.flora.chunks.values()) (e.far ? far++ : near++);
+    for (const e of w.flora.chunks.values()) (e.coarse ? far++ : near++);
     let nearInst = 0;
     for (const pool of w.flora.barkPools) if (pool) nearInst += pool.mesh.count;
+    let farInst = 0;
+    for (const pool of Object.values(w.flora.farPools)) farInst += pool.mesh.count;
+    const reach = +w.flora.farReach.toFixed(2);
     let negative = 0;
     const pools = {};
     for (const [form, pool] of Object.entries(w.flora.farPools)) {
@@ -123,16 +136,15 @@ for (const alt of [2, 280, 600]) {
     g.engine.render();
     const info = g.engine.renderer.info;
     return {
-      near, far, nearInst, pools, negative,
+      near, far, nearInst, farInst, reach, pools, negative,
       canopy: +canopy.toFixed(3),
       corrupt: window.__corrupt,
       calls: info.render.calls,
       tris: +(info.render.triangles / 1e6).toFixed(2),
     };
-  }, alt);
+  });
   rows.push({ alt, ...r });
-  console.log(`  ${String(alt).padStart(4)} m · near ${String(r.near).padStart(3)} chunks (${String(r.nearInst).padStart(5)} full-detail trees) · far ${String(r.far).padStart(3)} · ${r.calls} calls · ${r.tris}M tris`);
-  console.log(`         far pools ${JSON.stringify(r.pools)}`);
+  console.log(`  ${String(alt).padStart(4)} m · ${String(r.nearInst).padStart(5)} full-detail · ${String(r.farInst).padStart(6)} silhouettes · reach ${r.reach} · ${String(r.near).padStart(3)} fine / ${String(r.far).padStart(3)} coarse chunks · ${r.calls} calls · ${r.tris}M tris`);
 }
 
 const ground = rows[0];

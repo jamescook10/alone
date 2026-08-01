@@ -228,7 +228,10 @@ export class Terrain {
     const dy = Math.max(0, Math.abs(camPos.y - (node.minY + node.maxY) / 2) - node.size);
     const d = Math.sqrt(dx * dx + dz * dz + dy * dy * 0.35);
 
-    const wantSplit = node.lod > 0 && d < node.size * SPLIT_K;
+    // Hysteresis: split at 2.1 node-sizes, merge back out at 2.35. Without it,
+    // drifting back and forth across one threshold destroys and rebuilds four
+    // chunks and every tree on them, over and over.
+    const wantSplit = node.lod > 0 && d < node.size * (node.children ? SPLIT_K * 1.12 : SPLIT_K);
 
     if (wantSplit) {
       if (!node.children) {
@@ -314,7 +317,13 @@ export class Terrain {
         // Beyond a couple of kilometres the flat horizon plate takes over,
         // so there is no point meshing water out there.
         wantWater: node.lod <= 4,
-        wantScatter: node.lod <= 1,
+        // Trees reach lod 3, about 2.8 km; rocks and grass only ever show on
+        // the near tiers. Each coarser tier takes a rank-thinned SUBSET of
+        // exactly the same trees, so a split adds trees rather than replacing
+        // them, and the ranks it drops are already culled by distance.
+        wantScatter: node.lod <= 3,
+        wantGround: node.lod <= 1,
+        keep: node.lod <= 1 ? 1 : node.lod === 2 ? 0.30 : 0.09,
       });
     }
   }
