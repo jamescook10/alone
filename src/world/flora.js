@@ -25,6 +25,7 @@ const GROW_VERT_PARS = /* glsl */ `
 attribute float aBirth;
 attribute float aRate;
 attribute vec3 aTint;
+attribute float aSpawn;
 uniform float uWorldDay;
 varying vec3 vTint;
 `;
@@ -33,7 +34,11 @@ const GROW_VERT_BODY = /* glsl */ `
 {
   float age = max( 0.0, uWorldDay - aBirth );
   float m = clamp( pow( age * aRate, 0.55 ), 0.035, 1.0 );
-  transformed *= m;
+  // Streamed-in instances scale up from the ground over half a second or so
+  // instead of popping. aSpawn is the world-day the slot appeared on screen
+  // (or -1e9 for anything that must arrive full-size, like a retier swap).
+  float fs = clamp( ( uWorldDay - aSpawn ) * 2400.0, 0.0, 1.0 );
+  transformed *= m * ( fs * ( 2.0 - fs ) );
   vTint = aTint;
 }
 `;
@@ -743,12 +748,16 @@ class Pool {
       this.birth = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
       this.rate = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
       this.tint = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+      // Filled with "long ago" so a slot nobody stamps arrives full-size.
+      this.spawn = new THREE.InstancedBufferAttribute(new Float32Array(capacity).fill(-1e9), 1);
       this.birth.setUsage(THREE.DynamicDrawUsage);
       this.rate.setUsage(THREE.DynamicDrawUsage);
       this.tint.setUsage(THREE.DynamicDrawUsage);
+      this.spawn.setUsage(THREE.DynamicDrawUsage);
       geo.setAttribute('aBirth', this.birth);
       geo.setAttribute('aRate', this.rate);
       geo.setAttribute('aTint', this.tint);
+      geo.setAttribute('aSpawn', this.spawn);
     }
     this.dirty = false;
     // Touched-slot range since the last commit, kept separately for the
@@ -795,6 +804,7 @@ class Pool {
     if (this.birth) {
       this.birth.array[to] = this.birth.array[from];
       this.rate.array[to] = this.rate.array[from];
+      this.spawn.array[to] = this.spawn.array[from];
       for (let k = 0; k < 3; k++) this.tint.array[to * 3 + k] = this.tint.array[from * 3 + k];
       this._touchG(to);
     }
@@ -811,6 +821,13 @@ class Pool {
     this.tint.array[i * 3] = tr;
     this.tint.array[i * 3 + 1] = tg;
     this.tint.array[i * 3 + 2] = tb;
+    this._touchG(i);
+    this.dirty = true;
+  }
+  /** World-day this slot streamed onto the screen; -1e9 = arrive full-size. */
+  setSpawn(i, day) {
+    if (!this.spawn) return;
+    this.spawn.array[i] = day;
     this._touchG(i);
     this.dirty = true;
   }
@@ -836,6 +853,9 @@ class Pool {
       this.rate.clearUpdateRanges();
       this.rate.addUpdateRange(this._gLo, n);
       this.rate.needsUpdate = true;
+      this.spawn.clearUpdateRanges();
+      this.spawn.addUpdateRange(this._gLo, n);
+      this.spawn.needsUpdate = true;
       this.tint.clearUpdateRanges();
       this.tint.addUpdateRange(this._gLo * 3, n * 3);
       this.tint.needsUpdate = true;
@@ -1007,13 +1027,16 @@ export class Flora {
     return Math.hypot(dx, dz);
   }
 
-  onChunkLoaded(node, scatter) {
+  onChunkLoaded(node, scatter, fade = true) {
     const entry = {
       node,
       // Only the ring you can actually walk through gets full geometry -
       // and with baked trees that ring is priced by distance, not just LOD:
       // a full quadtree leaf can still be 250m away.
       far: node.lod >= 1 || this._chunkDist(node) > 195,
+      // Freshly streamed chunks scale their instances in over half a second;
+      // a retier rebuild swaps like-for-like and must arrive full-size.
+      fade,
       visible: true,
       plants: [], // {sp, slotBark, slotLeaf, slotFruit, x,y,z, scale, rot, id, birth, health, fruit}
       rocks: [],
@@ -1044,6 +1067,7 @@ export class Flora {
       }
     }
 
+    const spawnDay = fade ? this.worldDay : -1e9;
     const R = scatter.rocks;
     entry.rockSrc = R;
     entry.rockAt = [];
@@ -1054,6 +1078,7 @@ export class Flora {
       const rc = rockTint(R[i + 7] | 0);
       const v = 0.86 + hash3f(R[i] | 0, R[i + 2] | 0, 5) * 0.28;
       this.rockPool.setGrowth(slot, -999, 99, rc[0] * v, rc[1] * v, rc[2] * v);
+      this.rockPool.setSpawn(slot, spawnDay);
       entry.rocks.push(slot);
       entry.rockAt.push(i);
     }
@@ -1075,6 +1100,7 @@ export class Flora {
         ? grassTint(G[i + 6] | 0, hash3f(i, node.x | 0, 3))
         : FLOWER_TINTS[(type - 1) % FLOWER_TINTS.length];
       this.grassPool.setGrowth(slot, -999, 99, t[0], t[1], t[2]);
+      this.grassPool.setSpawn(slot, spawnDay);
       entry.grass.push(slot);
     }
   }
@@ -1117,6 +1143,7 @@ export class Flora {
     QUAT.setFromAxisAngle(UP, rec.rot);
     M4.compose(VEC.set(rec.x, rec.y, rec.z), QUAT, SCL.set(isc, isc, isc));
     const tint = rec.health >= 0.999 ? 1 : Math.max(0.10, rec.health);
+    const spawnDay = entry.fade ? this.worldDay : -1e9;
     if (bp) {
       rec.slotBark = bp.alloc(entry);
       if (rec.slotBark >= 0) {
@@ -1128,6 +1155,7 @@ export class Flora {
         const fc = far ? FAR[rec.sp][2] : null;
         if (fc) bp.setGrowth(rec.slotBark, rec.birth, rec.rate, fc[0] * tint, fc[1] * tint, fc[2] * tint);
         else bp.setGrowth(rec.slotBark, rec.birth, rec.rate, tint, tint * 0.92, tint * 0.88);
+        bp.setSpawn(rec.slotBark, spawnDay);
       }
     }
     if (lp && rec.health > 0.05) {
@@ -1136,6 +1164,7 @@ export class Flora {
         lp.setMatrix(rec.slotLeaf, M4);
         const v = 0.82 + hash3f(rec.id & 1023, rec.sp, 7) * 0.36;
         lp.setGrowth(rec.slotLeaf, rec.birth, rec.rate, tint * v, tint * (v * 1.02), tint * (v * 0.9));
+        lp.setSpawn(rec.slotLeaf, spawnDay);
       }
     }
     entry.plants.push(rec);
@@ -1198,6 +1227,8 @@ export class Flora {
     this.fruitPool.setMatrix(slot, M4);
     const c = FRUIT_TINTS[info.fruit] || [0.7, 0.2, 0.15];
     this.fruitPool.setGrowth(slot, rec.birth, rec.rate, c[0], c[1], c[2]);
+    // Regrowing fruit swells back over the fade too, instead of snapping on.
+    this.fruitPool.setSpawn(slot, entry.fade ? this.worldDay : -1e9);
     rec.slotFruit = slot;
   }
 
@@ -1424,7 +1455,7 @@ export class Flora {
     }
     if (best) {
       this.onChunkUnloaded(best);
-      this.onChunkLoaded(best, best.scatter);
+      this.onChunkLoaded(best, best.scatter, false);
     }
   }
 
