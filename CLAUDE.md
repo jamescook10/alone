@@ -123,10 +123,10 @@ triangles. Count before you build.
   `Wildlife._patch` and `Flora._patchGrowth`.
 - **three.js strips `.`, `[`, `]`, `:` and `/` out of node names on load**,
   because those are the separators its animation-track paths are built from.
-  The character rig names its bones `upperleg.l`; by the time you can see
-  them they are `upperlegl`. A lookup table keyed the other way misses every
-  limb, moves nothing, and reports no error — everything in
-  `wandererMesh.js` goes through `norm()` for exactly this reason.
+  Nothing in the game loads a rigged model any more, but if anything ever
+  does again: a bone authored as `upperleg.l` arrives as `upperlegl`, and a
+  lookup table keyed the other way misses every limb, changes nothing, and
+  reports no error.
 - **Two transparent surfaces at nearly the same height produce moire.** The
   horizon plate sits at −2.2 m, writes depth and draws before the water.
 - **Physically scaled light needs physically scaled albedo.** Ground colours in
@@ -204,7 +204,7 @@ src/world/   biomes (the table of places) · worldgen oracle
              terrain + worker · sky · weather
              flora · wildlife · civilisation · World (owns update order)
 src/sim/     chemistry (heat, phase change) · fire · physics
-src/player/  input · player body · interaction · inventory
+src/player/  input · player body · the camera · interaction · inventory
 src/audio/   synthesis · soundscape · generative score
 src/ui/      hud, journal, settings
 ```
@@ -215,12 +215,11 @@ src/ui/      hud, journal, settings
   lifted the original no-assets rule to get a polished look: trees are now
   generated offline by `scripts/bake-trees.mjs` (ez-tree, MIT) into
   `public/assets/`, with their textures vendored from the same MIT package —
-  see `public/assets/trees/LICENSE.md`. The player's body is **generated in
-  code** (`src/player/wandererMesh.js`); the only thing baked about it is its
-  motion — a skeleton and seven clips from the KayKit Rogue (CC0), with the
-  mesh and its atlas thrown away at bake time by
-  `scripts/bake-character.mjs` — see `public/assets/character/LICENSE.md`.
-  Nothing the game loads at run time is a texture any more.
+  see `public/assets/trees/LICENSE.md`. **The game currently loads nothing at
+  run time at all** — the flat-shaded restyle stopped it reading the tree
+  pack, and taking the third-person camera out took the player's animated
+  body with it. `loadAssets` is a stub over a pack kept on disk for
+  reference; wire it back up if a baked look ever returns.
   The world is still procedurally *placed* and everything still works
   (procedural fallbacks) if the assets fail to load. Keep new assets CC0/MIT,
   keep the pack a few MB, and prefer bake scripts over checked-in binaries

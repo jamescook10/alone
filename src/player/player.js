@@ -9,8 +9,7 @@ import { clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 import { atmo } from '../gfx/atmosphere.js';
 import { BIOME } from '../world/worldgen.js';
 import { ambientAt } from '../sim/chemistry.js';
-import { createCharacter } from './character.js';
-import { CameraRig } from './cameraRig.js';
+import { View } from './view.js';
 
 const EYE = 1.66;
 const EYE_CROUCH = 1.02;
@@ -51,8 +50,7 @@ export class Player {
     this.sitYaw = null;
     this.rawMove = false;
     this._satBefore = false;
-    this.character = createCharacter(world.engine.scene);
-    this.rig = new CameraRig(world, this);
+    this.view = new View(world, this);
 
     this.bob = 0;
     this.bobAmount = 0;
@@ -94,8 +92,8 @@ export class Player {
   _look(dt) {
     const inp = this.input;
     if (!inp) return;
-    // The camera's locked ease-in owns the view for its two seconds.
-    if (this.rig.inputLocked) return;
+    // The settling turn after you sit down owns the view while it runs.
+    if (this.view.inputLocked) return;
     const s = inp.sensitivity;
     this.yaw -= inp.mouseDX * s;
     this.pitch -= inp.mouseDY * s * (inp.invertY ? -1 : 1);
@@ -150,10 +148,10 @@ export class Player {
     let wantUp = inp && inp.down('Space');
     let wantDown = inp && (inp.down('ShiftLeft') || inp.down('KeyZ'));
 
-    // Raw intent, before the camera lock swallows it: the rig watches this to
-    // know when movement should break first person.
+    // Raw intent, before the settling turn swallows it: standing up again
+    // has to be able to see that you pushed forward during it.
     this.rawMove = Math.hypot(ax.x, ax.y) > 0.06 || !!wantUp;
-    if (this.rig.inputLocked) {
+    if (this.view.inputLocked) {
       ax.x = 0;
       ax.y = 0;
       wantSprint = wantCrouch = wantUp = wantDown = false;
@@ -162,11 +160,11 @@ export class Player {
     const wantSink = inp && (wantCrouch || inp.down('KeyZ'));
 
     /* --- sitting ------------------------------------------------------- */
-    if (inp && inp.hit('KeyX') && !this.rig.inputLocked && !this.drifting && !this.swimming) {
+    if (inp && inp.hit('KeyX') && !this.view.inputLocked && !this.drifting && !this.swimming) {
       if (this.sitting) this.standUp();
       else if (this.onGround) this.sitDown();
     }
-    if (this.sitting && !this.rig.inputLocked && this.rawMove) this.standUp();
+    if (this.sitting && !this.view.inputLocked && this.rawMove) this.standUp();
     if (this.sitting && (this.swimming || this.drifting)) this.standUp();
     this.sit01 = lerp(this.sit01, this.sitting ? 1 : 0, 1 - Math.exp(-dt * 5));
 
@@ -548,8 +546,7 @@ export class Player {
       FP_EYE.set(v.camPos.x, v.camPos.y, v.camPos.z);
     }
     const roll = Math.sin(this.bob) * 0.012 * this.bobAmount + swim * 0.3;
-    this.rig.update(dt, FP_EYE, roll, sx, sy);
-    this.character.update(dt, this);
+    this.view.update(dt, FP_EYE, roll, sx, sy);
 
     // Field of view breathes with speed, which sells running - and in flight it
     // is the only cue that you are doing 120 m/s, since there is no engine and
@@ -590,7 +587,8 @@ export class Player {
     this.velocity.x = 0;
     this.velocity.z = 0;
     // If this spot faces a wall, a slope or a trunk, turn toward the view.
-    this.sitYaw = this.rig.chooseSitYaw();
+    this.sitYaw = this.view.chooseSitYaw();
+    this.view.beginSitTurn();
     if (!this._satBefore) {
       this._satBefore = true;
       this.world.note('You sat down for a while. The world went on without you, gently.', 'note');

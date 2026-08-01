@@ -6,12 +6,10 @@
 // silently falls back to the old in-code builders and still runs.
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export const assets = {
   trees: null, // { name: { bark, leaf, farBark, farLeaf, tex: {bark, leaf} } }
   terrain: false, // true when the baked terrain splat sets are present
-  character: null, // { scene, clips } - the rigged player body, see bake-character.mjs
   texture: null, // (path, {srgb}) -> THREE.Texture, cached
 };
 
@@ -36,16 +34,9 @@ export async function loadAssets(base = 'assets/') {
   assets.trees = null;
   assets.terrain = false;
 
-  try {
-    const res = await fetch(base + 'character/MANIFEST.json');
-    if (!res.ok) throw new Error('manifest http ' + res.status);
-    const manifest = await res.json();
-    const gltf = await new GLTFLoader().loadAsync(base + 'character/' + manifest.file);
-    if (!gltf.animations || !gltf.animations.length) throw new Error('no animation clips');
-    assets.character = { scene: gltf.scene, clips: gltf.animations };
-  } catch (e) {
-    console.warn('baked character unavailable, using procedural body:', e.message);
-    assets.character = null;
-  }
+  // Nothing else is fetched. The player's animated body was the last thing
+  // this loaded, and it went out with the third-person camera - so the game
+  // now downloads no models and no textures at all at run time. The bake
+  // scripts and the tree pack stay on disk for reference.
   return assets;
 }

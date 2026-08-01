@@ -112,8 +112,9 @@ export class Interaction {
     }
 
     if (inp) {
-      // Choosing what you hold. The wheel belongs to the camera zoom now -
-      // touchpads scroll far too easily for it to flick through your hands.
+      // Choosing what you hold. Deliberately not the wheel, even though the
+      // camera zoom that took it from here has itself gone: touchpads scroll
+      // far too easily for it to flick through your hands.
       for (let i = 0; i < 9; i++) {
         if (inp.hit('Digit' + (i + 1))) this.inv.select(i);
       }
