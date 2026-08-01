@@ -64,6 +64,7 @@ function buildHorizon(req) {
 
   const heights = new Float32Array(nVerts);
   const temps = new Float32Array(nVerts);
+  const moists = new Float32Array(nVerts);
   const biomes = new Uint8Array(nVerts);
   for (let k = 0; k < rings; k++) {
     const r = radii[k];
@@ -73,6 +74,7 @@ function buildHorizon(req) {
       const v = k * azi + i;
       heights[v] = s.height;
       temps[v] = s.temperature;
+      moists[v] = s.moisture;
       biomes[v] = s.biome;
     }
   }
@@ -118,6 +120,16 @@ function buildHorizon(req) {
         cr = (info.col[0] + info.col2[0]) * 0.5;
         cg = (info.col[1] + info.col2[1]) * 0.5;
         cb = (info.col[2] + info.col2[2]) * 0.5;
+        // The same painted canopy the far chunks wear, so a forested range
+        // does not change colour where the streamed terrain hands over.
+        const density = info.trees * (0.55 + moists[v] * 0.9);
+        if (density > 0.05) {
+          const canopy = Math.min(0.62, density * 0.55);
+          const warm = smoothstep(3, 13, temps[v]);
+          cr = lerp(cr, lerp(CANOPY_COLD[0], CANOPY_WARM[0], warm), canopy);
+          cg = lerp(cg, lerp(CANOPY_COLD[1], CANOPY_WARM[1], warm), canopy);
+          cb = lerp(cb, lerp(CANOPY_COLD[2], CANOPY_WARM[2], warm), canopy);
+        }
         const rockCol = info.rock || ROCK_COL;
         const rock = smoothstep(0.46, 0.60, slope);
         cr = lerp(cr, rockCol[0], rock);
@@ -247,6 +259,7 @@ function build(req) {
       GC.water = gwater[gi]; GC.river = griver[gi];
       GC.road = groad[gi]; GC.surface = gsurf[gi]; GC.town = gtown[gi];
       GC.rail = grail[gi]; GC.farm = gfarm[gi]; GC.dune = gdune[gi];
+      GC.lod = lod;
       groundColor(GC, col, MATW);
       colors[vi * 3] = col[0];
       colors[vi * 3 + 1] = col[1];
@@ -355,8 +368,18 @@ const MATW = [0, 0]; // sand, snow weights for the texture splat
 // argument call signature was already unreadable before the railways arrived.
 const GC = {
   x: 0, z: 0, h: 0, biome: 0, temp: 0, moist: 0, slope: 0, water: 0,
-  river: 0, road: 0, surface: 0, town: 0, rail: 0, farm: 0, dune: 0,
+  river: 0, road: 0, surface: 0, town: 0, rail: 0, farm: 0, dune: 0, lod: 0,
 };
+
+// Distant forest is painted onto the ground. Instanced trees stop at the
+// lod<=1 ring (about a kilometre), and beyond it a forested hill used to be
+// bare green - so flying showed naked squares that suddenly grew trees.
+// From that far away a forest is its canopy seen from above, which is just a
+// colour: dark blue-green where it is cold conifer country, warmer where it
+// is broadleaf. The near ring keeps clean ground because the real trees
+// standing on it already darken it.
+const CANOPY_COLD = [s2l(0.24), s2l(0.38), s2l(0.29)];
+const CANOPY_WARM = [s2l(0.34), s2l(0.52), s2l(0.29)];
 
 // Flat-look overlays, authored in sRGB pastels and converted once. Biomes may
 // override the rock and the sand - red rock in badlands, black sand under a
@@ -405,6 +428,22 @@ function groundColor(c, out, matw) {
     r += k * 0.10; g += k * 0.085; b += k * 0.05;
   }
 
+  // Painted canopy past the instanced-tree ring; ragged at the wood's edge,
+  // solid in the deep forest, and damping the snow lerp below keeps a snowy
+  // taiga stippled dark the way real conifer country looks from the air.
+  let canopy = 0;
+  if (c.lod >= 2) {
+    const density = info.trees * (0.55 + c.moist * 0.9);
+    if (density > 0.05) {
+      const mot = hashNoise(x * 0.0045, z * 0.0045) * 0.7 + hashNoise(x * 0.019, z * 0.019) * 0.3;
+      canopy = Math.min(0.62, density * 0.55) * smoothstep(0.15, 0.6, mot + density * 0.2);
+      const warm = smoothstep(3, 13, temp);
+      r = lerp(r, lerp(CANOPY_COLD[0], CANOPY_WARM[0], warm), canopy);
+      g = lerp(g, lerp(CANOPY_COLD[1], CANOPY_WARM[1], warm), canopy);
+      b = lerp(b, lerp(CANOPY_COLD[2], CANOPY_WARM[2], warm), canopy);
+    }
+  }
+
   // Steep ground shows rock, over a narrow band so the edge stays clean.
   const rockCol = info.rock || ROCK_COL;
   const rock = smoothstep(0.46, 0.60, slope);
@@ -419,7 +458,7 @@ function groundColor(c, out, matw) {
   // atmosphere runs for trees, rocks and buildings, so a snowy hillside now
   // carries snowy trees and snowy roofs instead of green ones.
   const snowLine = smoothstep(4.0, -3.0, temp);
-  const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope));
+  const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope)) * (1 - canopy * 0.6);
   if (matw) matw[1] = snow;
   if (snow > 0.01) {
     r = lerp(r, SNOW_COL[0], snow);

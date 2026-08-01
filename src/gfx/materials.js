@@ -170,8 +170,15 @@ const WATER_FRAG = /* glsl */ `
   varying float vCrest;
 
   void main() {
-    vec3 V = normalize( cameraPosition - vWorldPos );
+    vec3 dv = cameraPosition - vWorldPos;
+    float vdist = length( dv );
+    vec3 V = dv / max( vdist, 1e-4 );
     vec2 p = vWorldPos.xz;
+    // Foam flecks and facet glints are sub-pixel past a few hundred metres,
+    // where they alias into white noise crawling over the whole sea - worst
+    // from the aeroplane. Distance keeps the body colour and the fresnel and
+    // lets the glitter live only where it can resolve.
+    float farK = 1.0 - smoothstep( 350.0, 1100.0, vdist );
 
     // Faceted normal straight from the displaced surface: every triangle of
     // the swell is one flat mirror shard, which is what makes Gerstner waves
@@ -190,7 +197,7 @@ const WATER_FRAG = /* glsl */ `
     // Sun sparkle off the facets.
     vec3 H = normalize( uSunDir + V );
     float spec = pow( max( dot( N, H ), 0.0 ), 140.0 );
-    col += uSunColor * spec * 1.6;
+    col += uSunColor * spec * 1.6 * ( 0.12 + 0.88 * farK );
 
     // Foam: shoreline wash, river churn, and wind-torn whitecaps on crests.
     // Thresholds sit high so foam stays a ribbon at the water's edge and a
@@ -207,7 +214,7 @@ const WATER_FRAG = /* glsl */ `
       + whitecap * smoothstep( 0.55, 0.80, fn2 );
     // Hard-edged foam patches, not a soft wash: quantising the mask keeps it
     // in the same graphic language as the flat facets.
-    foam = smoothstep( 0.34, 0.48, foam );
+    foam = smoothstep( 0.34, 0.48, foam ) * farK;
     col = mix( col, vec3( 0.97, 0.99, 1.0 ), clamp( foam, 0.0, 0.9 ) );
 
     float alpha = mix( 0.55, 0.93, clamp( vDepth / 1.6, 0.0, 1.0 ) );

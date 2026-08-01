@@ -904,10 +904,14 @@ export class Flora {
     }
 
     // One far pool per silhouette form, shared by every species that has that
-    // outline; the per-instance tint and scale carry the difference.
+    // outline; the per-instance tint and scale carry the difference. Sized for
+    // the view from the aeroplane, not from the ground: at altitude every
+    // tree-bearing chunk is on screen at once, and 7000 slots of 'round' ran
+    // out with half the broadleaf forest missing - which is why whole hills
+    // of oaks used to appear only when you were nearly on top of them.
     this.farPools = {};
     for (const form of FAR_FORMS) {
-      const pool = new Pool(buildFarForm(form, world.seed), this.leafMat, 7000, this.scene);
+      const pool = new Pool(buildFarForm(form, world.seed), this.leafMat, 16000, this.scene);
       pool.mesh.castShadow = false;
       this.farPools[form] = pool;
     }
@@ -1037,6 +1041,10 @@ export class Flora {
       // Freshly streamed chunks scale their instances in over half a second;
       // a retier rebuild swaps like-for-like and must arrive full-size.
       fade,
+      // Set when any pool ran out of slots while stocking this chunk, so the
+      // retier can come back for it once something else has streamed out.
+      starved: false,
+      starveRetry: 0,
       visible: true,
       plants: [], // {sp, slotBark, slotLeaf, slotFruit, x,y,z, scale, rot, id, birth, health, fruit}
       rocks: [],
@@ -1073,7 +1081,7 @@ export class Flora {
     entry.rockAt = [];
     for (let i = 0; i < R.length; i += 8) {
       const slot = this.rockPool.alloc(entry);
-      if (slot < 0) break;
+      if (slot < 0) { entry.starved = true; break; }
       this.rockPool.setMatrix(slot, this._rockMatrix(R, i));
       const rc = rockTint(R[i + 7] | 0);
       const v = 0.86 + hash3f(R[i] | 0, R[i + 2] | 0, 5) * 0.28;
@@ -1086,7 +1094,7 @@ export class Flora {
     const G = scatter.grass;
     for (let i = 0; i < G.length; i += 7) {
       const slot = this.grassPool.alloc(entry);
-      if (slot < 0) break;
+      if (slot < 0) { entry.starved = true; break; }
       const s = G[i + 3];
       QUAT.setFromAxisAngle(UP, G[i + 4]);
       M4.compose(VEC.set(G[i], G[i + 1], G[i + 2]), QUAT, SCL.set(s, s * (0.8 + s * 0.5), s));
@@ -1146,6 +1154,7 @@ export class Flora {
     const spawnDay = entry.fade ? this.worldDay : -1e9;
     if (bp) {
       rec.slotBark = bp.alloc(entry);
+      if (rec.slotBark < 0) entry.starved = true;
       if (rec.slotBark >= 0) {
         bp.setMatrix(rec.slotBark, M4);
         // A far silhouette is white geometry, so its whole colour arrives on
@@ -1160,6 +1169,7 @@ export class Flora {
     }
     if (lp && rec.health > 0.05) {
       rec.slotLeaf = lp.alloc(entry);
+      if (rec.slotLeaf < 0) entry.starved = true;
       if (rec.slotLeaf >= 0) {
         lp.setMatrix(rec.slotLeaf, M4);
         const v = 0.82 + hash3f(rec.id & 1023, rec.sp, 7) * 0.36;
@@ -1442,20 +1452,37 @@ export class Flora {
     // of you stayed silhouettes for several more seconds.
     let best = null;
     let bestD = Infinity;
+    // Starved chunks (a pool ran dry while stocking them) get a second look
+    // once tier work is done - nearest first, so freed slots always land on
+    // the barest chunk in front of you, not on whatever streams in next.
+    let starved = null;
+    let starvedD = Infinity;
+    const now = this.world.time;
     for (const entry of this.chunks.values()) {
       const node = entry.node;
-      if (node.lod !== 0 || !node.scatter) continue;
+      if (!node.scatter) continue;
       const d = this._chunkDist(node);
-      const want = entry.far ? d > 170 : d > 220;
-      if (want === entry.far) continue;
-      if (d < bestD) {
-        bestD = d;
-        best = node;
+      if (node.lod === 0) {
+        const want = entry.far ? d > 170 : d > 220;
+        if (want !== entry.far) {
+          if (d < bestD) {
+            bestD = d;
+            best = node;
+          }
+          continue;
+        }
+      }
+      if (entry.starved && now - entry.starveRetry > 2.5 && d < starvedD) {
+        starvedD = d;
+        starved = node;
       }
     }
+    if (!best) best = starved;
     if (best) {
       this.onChunkUnloaded(best);
       this.onChunkLoaded(best, best.scatter, false);
+      const fresh = this.chunks.get(best);
+      if (fresh) fresh.starveRetry = now;
     }
   }
 
