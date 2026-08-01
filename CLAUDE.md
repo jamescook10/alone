@@ -36,10 +36,13 @@ screen for real people. Always, before pushing:
    and every landmark kind it can find, and flies the aeroplane. The smoke test
    only ever sees the spot you wake up in, and almost nothing in this world is
    there. Most of what has broken since the world got big broke somewhere else.
-4. Look at a screenshot. This is a game; a change that compiles and throws no
-   errors can still be visibly wrong. Several bugs here rendered perfectly
-   cleanly and looked terrible. `npm run postcards -- shots/` takes one of each
-   biome in a single browser session.
+4. Look at a screenshot **only when pushing straight to `main`**. This is a
+   game; a change that compiles and throws no errors can still be visibly
+   wrong. Several bugs here rendered perfectly cleanly and looked terrible.
+   `npm run postcards -- shots/` takes one of each biome in a single browser
+   session. When working on a branch the owner will review, skip the
+   screenshot pass - it is quicker for them to check out the branch and boot
+   the game for real than for headless SwiftShader to render it.
 5. If you touched the sky, `npm run skyshots -- shots/` instead. It stands you
    on an open hilltop with no town in sight and takes the Milky Way, the moon's
    phases, an aurora, a meteor, dawn, dusk, cirrus, a rainbow and a lightning
