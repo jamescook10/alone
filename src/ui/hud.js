@@ -14,7 +14,6 @@ const HELP = [
   ['E / Left click', 'use what is in front of you'],
   ['Q / Right click', 'second action · eat · drink'],
   ['1 – 9 / , .', 'choose what you are holding'],
-  ['Wheel', 'zoom the camera in and out'],
   ['Tab', 'menu — inventory and settings'],
   ['F', 'fly (and land again) · leave a vehicle'],
   ['Shift / C', 'aeroplane throttle up and down'],

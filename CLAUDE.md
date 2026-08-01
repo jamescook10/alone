@@ -127,6 +127,12 @@ triangles. Count before you build.
   attribute declarations vanish while the code that uses them stays. Chain onto
   `onBeforeCompile` and target `varying vec3 vWorldPos;` instead — see
   `Wildlife._patch` and `Flora._patchGrowth`.
+- **three.js strips `.`, `[`, `]`, `:` and `/` out of node names on load**,
+  because those are the separators its animation-track paths are built from.
+  Nothing in the game loads a rigged model any more, but if anything ever
+  does again: a bone authored as `upperleg.l` arrives as `upperlegl`, and a
+  lookup table keyed the other way misses every limb, changes nothing, and
+  reports no error.
 - **Two transparent surfaces at nearly the same height produce moire.** The
   horizon plate sits at −2.2 m, writes depth and draws before the water.
 - **Physically scaled light needs physically scaled albedo.** Ground colours in
@@ -243,27 +249,30 @@ src/world/   biomes (the table of places) · worldgen oracle
              terrain + worker · sky · stars + star catalogue · weather
              clouds · flora · wildlife · civilisation · World (update order)
 src/sim/     chemistry (heat, phase change) · fire · physics
-src/player/  input · player body · interaction · inventory
+src/player/  input · player body · the camera · interaction · inventory
 src/audio/   synthesis · soundscape · generative score
 src/ui/      hud, journal, settings
 ```
 
 ## House style
 
-- Assets are **baked, not hand-made, and not fetched at run time**. The owner
-  lifted the original no-assets rule to get a polished look: trees are now
-  generated offline by `scripts/bake-trees.mjs` (ez-tree, MIT) into
-  `public/assets/`, with their textures vendored from the same MIT package —
-  see `public/assets/trees/LICENSE.md`. The player's visible body is the
-  KayKit Rogue (CC0), stripped to locomotion + sitting clips by
-  `scripts/bake-character.mjs` — see `public/assets/character/LICENSE.md`.
-  The world is still procedurally *placed* and everything still works
-  (procedural fallbacks) if the assets fail to load. Keep new assets CC0/MIT,
-  keep the pack a few MB, and prefer bake scripts over checked-in binaries
-  wherever possible so the "generated world" spirit survives.
-- Budgets for baked trees: ~600–1100 triangles near, ~60–100 far. The near
-  ring holds hundreds of full-detail trees at once; `Flora._retier` demotes
-  chunks past ~200 m to the far pools, so both numbers matter.
+- **The game ships no assets and loads none.** There is no `public/`, no
+  runtime loader, and every request a player makes is the HTML, the JS, the
+  CSS and the terrain worker — about 250 KB gzipped. It got back to that in
+  two steps: the flat-shaded restyle stopped anything reading the baked tree
+  and terrain packs, and taking the third-person camera out took the player's
+  animated body with it. The packs then sat in the deploy for a while being
+  downloaded by nobody, and were deleted.
+- The bake scripts stay, and they are the canonical form: `bake-trees.mjs`
+  (ez-tree, MIT) and `bake-terrain.mjs` regenerate their packs into
+  `public/assets/` from nothing but a command, vendoring their own licence
+  files as they go. If a baked look ever returns, run them and write a loader
+  again. Prefer that to checked-in binaries — a derived artifact in the repo
+  is one nobody can tell is stale, and the "generated world" spirit survives
+  the script far better than it survives the output.
+- Budgets, if baked trees ever come back: ~600–1100 triangles near, ~60–100
+  far. The near ring holds hundreds of full-detail trees at once; the far
+  pools start past ~200 m, so both numbers matter.
 - Comments explain *why*, especially where a number was tuned or a trap was
   avoided. Do not narrate what the code already says.
 - Commit messages: what changed and what it fixes, with the measurement if

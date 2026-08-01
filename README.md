@@ -146,7 +146,7 @@ src/
   world/     the world oracle · terrain streaming + worker · sky · weather
              flora · wildlife · civilisation · the World that owns them all
   sim/       materials and phase change · combustion · rigid bodies and explosions
-  player/    input · the body · reaching out and touching things · inventory
+  player/    input · the body · the camera · reaching out and touching things · inventory
   audio/     synthesis primitives · the soundscape · the generative score
   ui/        heads-up display, journal, settings
 ```
