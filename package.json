@@ -11,7 +11,8 @@
     "smoke": "node scripts/smoke.mjs",
     "tour": "node scripts/tour.mjs",
     "survey": "node scripts/survey.mjs",
-    "postcards": "node scripts/postcards.mjs"
+    "postcards": "node scripts/postcards.mjs",
+    "skyshots": "node scripts/skyshots.mjs"
   },
   "devDependencies": {
     "@dgreenheck/ez-tree": "^1.1.0",

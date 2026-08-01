@@ -82,6 +82,7 @@ export class UI {
         <div class="row"><span class="toggle" data-t="shadows">shadows</span><b class="v-shadows"></b></div>
         <div class="row"><span class="toggle" data-t="fardraw">draw distance</span><b class="v-fardraw"></b></div>
         <div class="row"><span class="toggle" data-t="look">look speed</span><b class="v-look"></b></div>
+        <div class="row"><span class="toggle" data-t="figures">constellations</span><b class="v-figures"></b></div>
         <div class="row"><span class="toggle" data-t="sound">sound</span><b class="v-sound"></b></div>
         <div class="row"><span class="toggle" data-t="res">resolution</span><b class="v-res"></b></div>
         <div class="row"><span class="toggle" data-t="fullscreen">fullscreen</span><b class="v-fullscreen"></b></div>
@@ -172,6 +173,13 @@ export class UI {
         inp.setLookSpeed(i < 0 ? steps[0] : steps[i]);
         break;
       }
+      case 'figures': {
+        // The lines between the stars. Off by default: they are there to be
+        // found, and a sky with the figures always drawn is a planetarium.
+        const st = this.world.sky.stars;
+        st.showFigures = !st.showFigures;
+        break;
+      }
       case 'sound':
         if (this.world.audio) {
           this.world.audio.enabled = !this.world.audio.enabled;
@@ -209,6 +217,7 @@ export class UI {
     set('shadows', e.quality.shadows ? 'on' : 'off');
     set('fardraw', e.quality.farK < 1 ? 'near' : 'far');
     set('look', this.world.input ? this.world.input.lookSpeed.toFixed(2).replace(/\.?0+$/, '') + '×' : '—');
+    set('figures', this.world.sky.stars.showFigures ? 'on' : 'off');
     set('sound', this.world.audio && this.world.audio.enabled ? 'on' : 'off');
     set('res', e.quality.pixelRatio.toFixed(2) + '×');
     set('fullscreen', document.fullscreenElement ? 'on' : 'off');
@@ -335,6 +344,7 @@ export class UI {
       this.statusEl.innerHTML = [
         `<span class="k">time</span>${fmtTime(w.sky.hours)} · day ${w.sky.day + 1}`,
         `<span class="k">sky</span>${w.weather.name}`,
+        `<span class="k">moon</span>${w.sky.moonName}`,
         `<span class="k">air</span>${p.temperature.toFixed(0)}°C`,
         `<span class="k">altitude</span>${alt > 0 ? alt.toFixed(0) : alt.toFixed(0)} m`,
         `<span class="k">bearing</span>${fmtBearing(p.heading)}`,
