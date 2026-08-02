@@ -108,6 +108,7 @@ export class World {
 
     atmo.uTime.value += dt;
     atmo.uPlayerPos.value.copy(p.position);
+    this._updateWaterFX(dt, p);
 
     // Follow the region's climate so trees, rocks and roofs cross the snow
     // line where the ground does. Eased, because walking over a chunk boundary
@@ -131,6 +132,65 @@ export class World {
     this.horizonSea.visible = !p.underwater;
 
     if (this.audio) this.audio.update(dt);
+  }
+
+  /**
+   * The things that only matter when there is water near you: the surface
+   * height the ground shader needs to put caustics on itself, the rings that
+   * spread from someone standing in it, and the mist over any fall within
+   * earshot. All of it is refreshed a few times a second rather than per
+   * frame - none of it moves fast enough to notice, and `waterAt` is a full
+   * world sample.
+   */
+  _updateWaterFX(dt, p) {
+    this._waterT = (this._waterT || 0) - dt;
+    if (this._waterT <= 0) {
+      this._waterT = 0.25;
+      // The nearest water surface. Caustics are only visible where you can
+      // see the bottom, so a short probe is all the ground shader needs.
+      let best = -9999;
+      for (let i = 0; i < 12; i++) {
+        const a = i * 2.399963;
+        const r = i === 0 ? 0 : 14 * Math.sqrt(i);
+        const wl = this.terrain.waterAt(p.position.x + Math.cos(a) * r, p.position.z + Math.sin(a) * r);
+        if (wl > best) best = wl;
+      }
+      atmo.uWaterY.value = best;
+      this.falls = this.wg.fallsNear(p.position.x, p.position.z, 240, this.falls || []);
+      // The loudest one within earshot, for the soundscape.
+      let near = null;
+      let nearD = Infinity;
+      for (const f of this.falls) {
+        const d = Math.hypot(f.x - p.position.x, f.z - p.position.z);
+        const loud = d / Math.max(0.3, f.fall * Math.sqrt(f.flow));
+        if (loud < nearD) {
+          nearD = loud;
+          near = f;
+          near.dist = d;
+        }
+      }
+      this.nearestFall = near;
+    }
+
+    // Rings spread from a body in the water, and harder when it is moving.
+    const wade = p.submersion > 0.04 && !p.underwater
+      ? Math.min(1, p.submersion * 2) * (0.30 + Math.min(0.7, p.speed * 0.22))
+      : 0;
+    atmo.uWade.value += (wade - atmo.uWade.value) * (1 - Math.exp(-dt * 6));
+
+    // Mist over the falls. Only the near ones, and only a few particles a
+    // second each - a fall is a standing plume, not a firework.
+    if (this.falls && this.falls.length && dt > 0) {
+      for (let i = 0; i < this.falls.length && i < 5; i++) {
+        const f = this.falls[i];
+        const d = Math.hypot(f.x - p.position.x, f.z - p.position.z);
+        if (d > 190) continue;
+        const scale = 0.7 + Math.min(2.2, f.w * 0.22 + f.drop * 0.05);
+        if (Math.random() < dt * (2.5 + f.fall * 5) * (1 - d / 190)) {
+          this.particles.spray(f.x, f.y - f.drop * 0.35, f.z, scale, 2);
+        }
+      }
+    }
   }
 
   /**

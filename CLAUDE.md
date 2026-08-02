@@ -163,6 +163,16 @@ triangles. Count before you build.
   canopy that stands in for distant trees is baked on every chunk and faded in
   by *camera distance* in the shader; keying it to `lod >= 2` made every LOD
   boundary a hard-edged square of darker green in the middle distance.
+- **A `ShaderMaterial` gets no free uniform declarations, and a shader that
+  fails to compile draws nothing without throwing.** `ATMO_PARS` declares the
+  atmosphere uniforms it uses; `uPlayerPos` is in the shared `atmo` object but
+  is *not* in `ATMO_PARS`, so using it in the water shader failed the whole
+  program. three.js logs that to the console and carries on, no exception, no
+  page error — so smoke and tour both passed while every lake and river in the
+  world was invisible, and the lit riverbed showing through looked plausible
+  enough to burn several rounds of screenshots chasing a foam bug that did not
+  exist. `npm run watershots` now fails loudly on shader console errors. If
+  water ever disappears, check the console before you touch the maths.
 - **Two transparent surfaces at nearly the same height produce moire.** The
   horizon plate sits at −2.2 m, writes depth and draws before the water.
 - **Physically scaled light needs physically scaled albedo.** Ground colours in
@@ -242,6 +252,26 @@ climate - it is ±1 °C over a few hundred metres, and its only job is to fray t
 edge wherever a threshold happens to fall, so a boundary is a mottled band a few
 hundred metres wide instead of a drawn line. Four fifths of boundaries interleave
 that way. Raise its amplitude and you get the old flickering world back.
+
+**Rivers are traced, not painted.** They used to be a band of `|fbm|` noise,
+which is why one could run along the side of a mountain and why its surface,
+tied to the local ground height, draped down that mountain. `WorldGen` now
+offers a spring on a coarse lattice wherever the country is wet and high
+enough, and *walks* the channel downhill over the smooth base height until it
+reaches the sea, runs into a lake (which it enters and leaves again at the
+lowest point of the rim) or runs out of length. Three things fall out of that
+and none of them could be had from noise: it can only flow downhill, its
+surface is monotonic and the ground is then cut down to meet it — so water is
+always *in* the land — and two springs in the same valley converge into one
+river with nothing arranging it, which is where confluences and the way a
+river widens downstream both come from. Two tiers, because a real network is
+mostly short streams: trunk rivers on a 3 km lattice, brooks on a 700 m one,
+giving ~0.33 km of channel per km² and water a median 400 m walk away. A path
+depends only on its own spring cell, so the five workers and the main thread
+trace identical rivers without talking. Channel width and depth go as √Q
+(`channelWidth`/`channelDepth`), and white water comes off the traced gradient
+carried to the mesh on the `fall` vertex attribute — never off flow speed,
+which a placid river also has.
 
 **Everything people left is made of the same boxes.** `Build` in
 `civilisation.js` owns the destructible-piece machinery; `District` (a

@@ -81,6 +81,33 @@ const LAKE_CELL = 2300;
 const TOWN_CELL = 4200;
 const SITE_CELL = 1250;
 const CTX_TILE = 384;
+
+// The drainage network. A spring is offered on this lattice; the channel is
+// then walked downhill in steps of RIVER_STEP for at most RIVER_STEPS of them,
+// so no river is longer than RIVER_REACH - which is also the radius a query
+// has to search to be certain it has found every river passing through it.
+//
+// Two tiers, because a real drainage network is mostly short streams. Trunk
+// rivers are rare and run for kilometres; the brooks that feed them are
+// everywhere and run for one or two. Measured drainage density on real
+// landscapes is 0.5-2 km of channel per km²; trunk rivers alone gave 0.07,
+// which is a world you could walk across all day without finding water.
+// Streams are also cheap: a short trace gathers over a short radius.
+const RIVER_TIERS = [
+  // cell    step  steps  gradE  flow0  salt
+  { cell: 3000, step: 100, steps: 92, e: 170, flow0: 1.00, salt: 0x2ea7, gate: 850, wet: 0.21 },
+  { cell: 700, step: 70, steps: 26, e: 105, flow0: 0.35, salt: 0x51c9, gate: 800, wet: 0.26 },
+];
+const RIVER_CELL = RIVER_TIERS[0].cell;
+const RIVER_REACH = RIVER_TIERS[0].step * RIVER_TIERS[0].steps;
+// Tracing asks for the ground height thousands of times along a path, and
+// neighbouring steps and neighbouring rivers ask about the same ground. The
+// answers are cached on this lattice and interpolated: at lod 9 the base
+// height has no content below a kilometre, so 100 m loses nothing.
+const RIVER_GRID = 100;
+// The gradient stencil. Wide on purpose - a river follows the valley, not
+// every hummock in it, and a narrow stencil makes the walk jitter.
+const RIVER_GRAD_E = 170;
 // Landform provinces have wavelengths of ten kilometres and up, so evaluating
 // them per vertex would be pure waste. They are sampled on this lattice and
 // bilinearly interpolated - still a pure function of (x, z), so all five
@@ -121,6 +148,10 @@ export class WorldGen {
     this._lakeCells = new Map();
     this._townCells = new Map();
     this._siteCells = new Map();
+    this._riverCells = new Map();
+    this._riverOrder = [];
+    this._bhCache = new Map();
+    this._bhOrder = [];
     this._ctxCache = new Map();
     this._ctxOrder = [];
     this._lfCache = new Map();
@@ -431,6 +462,41 @@ export class WorldGen {
     const roads = [];
     const rails = [];
     const sites = [];
+    const rivers = [];
+
+    // Rivers. A channel can have come nine kilometres from its spring, so
+    // every spring within that reach has to be traced to be sure none of them
+    // passes through this tile - and then only the segments that actually do
+    // are kept, which is what makes the per-vertex query cheap.
+    const keep2 = sq(CTX_TILE * 0.9 + 130);
+    for (let t = 0; t < RIVER_TIERS.length; t++) {
+      const T = RIVER_TIERS[t];
+      const rr = Math.ceil((CTX_TILE * 0.5 + T.step * T.steps) / T.cell) + 1;
+      const rvi = Math.floor(cx / T.cell);
+      const rvj = Math.floor(cz / T.cell);
+      for (let j = -rr; j <= rr; j++) {
+        for (let i = -rr; i <= rr; i++) {
+          const p = this.riverCell(rvi + i, rvj + j, t);
+          if (!p) continue;
+          for (let k = 0; k + 1 < p.n; k++) {
+            const ax = p.x[k], az = p.z[k], bx = p.x[k + 1], bz = p.z[k + 1];
+            if (segDist2(ax, az, bx, bz, cx, cz) > keep2) continue;
+            const sx = bx - ax;
+            const sz = bz - az;
+            const sl = Math.hypot(sx, sz) || 1;
+            rivers.push({
+              ax, az, bx, bz,
+              la: p.level[k], lb: p.level[k + 1],
+              wa: p.w[k], wb: p.w[k + 1],
+              da: p.depth[k], db: p.depth[k + 1],
+              fa: p.fall[k], fb: p.fall[k + 1],
+              qa: p.flow[k], qb: p.flow[k + 1],
+              dx: sx / sl, dz: sz / sl,
+            });
+          }
+        }
+      }
+    }
 
     const lr = Math.ceil((CTX_TILE * 0.5 + 340) / LAKE_CELL);
     const li = Math.floor(cx / LAKE_CELL);
@@ -477,7 +543,7 @@ export class WorldGen {
       }
     }
 
-    return { lakes, towns, roads, rails, sites };
+    return { lakes, towns, roads, rails, sites, rivers };
   }
 
   /* ---------------------------------------------------------------- lakes */
@@ -859,49 +925,431 @@ export class WorldGen {
 
   /* ---------------------------------------------------------------- rivers */
 
-  /**
-   * River presence at (x,z).
-   * Returns strength in [0,1] and the water surface level of the channel.
-   */
-  river(x, z, baseH, out, moist = 0.6) {
-    const n = this.n;
-    const wx = x + n.warp.fbm2(x * 0.00052 + 3.3, z * 0.00052 - 9.1, 2) * 190;
-    const wz = z + n.warp2.fbm2(x * 0.00052 - 5.7, z * 0.00052 + 2.4, 2) * 190;
-    const f = n.river.fbm2(wx * 0.000104, wz * 0.000104, 4, 2.03, 0.5);
-    const d = Math.abs(f);
-    // Rivers widen as the land falls toward the sea, and dry country has
-    // fewer and thinner ones - a permanent river through a sand sea would be
-    // the single most obviously wrong thing in the game.
-    const size = n.riverW.fbm2(x * 0.00021, z * 0.00021, 2) * 0.5 + 0.5;
-    const lowland = smoothstep(320, 10, baseH);
-    const wet = smoothstep(0.20, 0.52, moist);
-    const w = (0.0055 + 0.0125 * size) * (0.45 + 0.95 * lowland) * (0.25 + 0.85 * wet);
-    let s = 1 - smoothstep(w * 0.30, w, d);
-    // No rivers under the sea, and they fade out on high peaks.
-    s *= smoothstep(-1.0, 7.0, baseH) * smoothstep(1150, 780, baseH);
-    let level = baseH - 1.6;
-    if (s > 0.002) {
-      // A river channel is a noise band, not a drainage network, so nothing
-      // used to stop one traversing a mountain flank - and its surface, tied
-      // to the local base height, draped down the hillside like a wet ribbon.
-      // Land's median base slope is 0.09 and rivers used to reach 2.0; the
-      // gate fades over 0.16..0.38, which kills the cliff-face ribbons and
-      // keeps the valley floors. The two extra baseHeight calls only run
-      // inside the narrow river band, where they are worth paying for.
-      const e = 24;
-      const gx = this.baseHeight(x + e, z) - baseH;
-      const gz = this.baseHeight(x, z + e) - baseH;
-      const slope = Math.hypot(gx, gz) / e;
-      s *= 1 - smoothstep(0.16, 0.38, slope);
-      // What slope survives the gate digs in: sinking the surface with the
-      // grade keeps the tilted ribbon below its banks, so a stream crossing
-      // rolling ground reads as water in a gully, not water lying on top.
-      level -= Math.min(4, slope * 9);
+  /* ---------------------------------------------------------- drainage */
+
+  // Rivers used to be a band of |fbm| noise. A noise band knows nothing about
+  // which way is downhill, which is why one could run along the side of a
+  // mountain, and why its surface - tied to the local ground height - draped
+  // down that mountain like a wet ribbon laid over the land.
+  //
+  // These are traced instead. A spring is offered on a coarse lattice wherever
+  // the country is wet enough and high enough to feed one, and the channel is
+  // then WALKED downhill over the smooth base height until it reaches the sea,
+  // runs into a lake, or runs out of length. Three things fall out of that for
+  // free, and none of them could be had from noise:
+  //
+  //   - it can only ever flow downhill, because that is the only direction the
+  //     walk moves in;
+  //   - its surface height is monotonic, because the walk never lets the level
+  //     rise, and the ground is then cut down to meet it, so the water is
+  //     always IN the land rather than on it;
+  //   - two springs in the same valley converge into one river without
+  //     anything having to arrange it, because they are both walking the same
+  //     gradient. Confluences are emergent, and so is a river growing wider
+  //     the further it has come.
+  //
+  // It stays a pure function of the seed. A path depends only on its own
+  // spring cell, never on which chunk asked or in what order, so the five
+  // meshing workers and the main thread all trace the identical river without
+  // ever talking to each other.
+
+  /** Base height on the tracer's lattice, bilinearly interpolated. */
+  _bh(x, z) {
+    const G = RIVER_GRID;
+    const gx = Math.floor(x / G);
+    const gz = Math.floor(z / G);
+    const fx = x / G - gx;
+    const fz = z / G - gz;
+    const a = this._bhNode(gx, gz);
+    const b = this._bhNode(gx + 1, gz);
+    const c = this._bhNode(gx, gz + 1);
+    const d = this._bhNode(gx + 1, gz + 1);
+    const top = a + (b - a) * fx;
+    const bot = c + (d - c) * fx;
+    return top + (bot - top) * fz;
+  }
+
+  _bhNode(gx, gz) {
+    const key = gx * 8388608 + gz;
+    let v = this._bhCache.get(key);
+    if (v !== undefined) return v;
+    v = this._shape(gx * RIVER_GRID, gz * RIVER_GRID, TMPS4, 9).baseH;
+    this._bhCache.set(key, v);
+    this._bhOrder.push(key);
+    if (this._bhOrder.length > 131072) {
+      const drop = this._bhOrder.splice(0, 32768);
+      for (const k of drop) this._bhCache.delete(k);
     }
-    out.strength = s;
-    out.width = w;
-    out.level = level;
-    return s;
+    return v;
+  }
+
+  /** The traced channel rising in this cell of this tier, or null. */
+  riverCell(i, j, tier = 0) {
+    const key = (i * 4194304 + j) * 2 + tier;
+    let c = this._riverCells.get(key);
+    if (c !== undefined) return c;
+    c = this._traceRiver(i, j, tier);
+    this._riverCells.set(key, c);
+    this._riverOrder.push(key);
+    if (this._riverOrder.length > 6144) {
+      const drop = this._riverOrder.splice(0, 1536);
+      for (const k of drop) this._riverCells.delete(k);
+    }
+    return c;
+  }
+
+  _traceRiver(i, j, tier) {
+    const T = RIVER_TIERS[tier];
+    const RIVER_STEP = T.step;
+    const RIVER_STEPS = T.steps;
+    const RIVER_GRAD_E = T.e;
+    const hs = hash3i(i, j, this.seed ^ T.salt);
+    // Reject on the hash before touching the terrain: most of the world holds
+    // no spring, and finding that out must not cost a terrain sample.
+    if ((hs & 1023) > T.gate) return null;
+    const rx = ((hs >>> 10) & 1023) / 1023;
+    const rz = ((hs >>> 20) & 1023) / 1023;
+    let x = (i + 0.08 + rx * 0.84) * T.cell;
+    let z = (j + 0.08 + rz * 0.84) * T.cell;
+
+    // Read everything the spring test needs out of the scratch sample before
+    // anything else can reuse it - `lakeCell` below shares TMPS2.
+    const sp = this._shape(x, z, TMPS2, 9);
+    const srcH = sp.baseH;
+    const wet = sp.moist0 + sp.lf.basin * 0.12;
+    if (srcH < 14 || srcH > 1600) return null;
+    // A permanent channel needs rain to keep it running and ground to run
+    // down. This is the one line that keeps rivers out of the sand sea.
+    const odds = saturate((wet - T.wet) * 2.6) * (0.38 + 0.62 * smoothstep(20, 260, srcH));
+    if (hash3f(i, j, this.seed ^ 0x6d1) > odds) return null;
+
+    const px = [];
+    const pz = [];
+    const plv = [];
+    const pfl = [];
+    const pfa = [];
+    let dx = 0;
+    let dz = 0;
+    let level = this._bh(x, z) - 0.6;
+    let prevH = level + 0.6;
+    let stuck = 0;
+    let flow = T.flow0;
+    let seenLake = null;
+    let reachedSea = false;
+
+    for (let k = 0; k < RIVER_STEPS; k++) {
+      const bh = this._bh(x, z);
+      // The whole rule, in one line: the surface may fall and may not rise,
+      // and it is never above the ground it is crossing.
+      level = Math.min(level, bh - 0.6);
+      // And it is never much above the valley to either side of it. Without
+      // this a channel crossing the shoulder of a hill keeps a level set
+      // further upstream and reads as a canal running along the hillside -
+      // the ground a hundred metres off to one side being lower than the
+      // water. Water does not do that; it goes to the low ground.
+      if (k > 0) {
+        // Two ranges: the near pair catches a gully just off the channel, the
+        // far pair catches a whole valley the walk is running beside rather
+        // than in. Only the near one existed at first and the far one is what
+        // stops the long shelf cases.
+        let side = Infinity;
+        for (let r = 0; r < 2; r++) {
+          const q = r === 0 ? 45 : 130;
+          const a = this._bh(x - dz * q, z + dx * q);
+          const b = this._bh(x + dz * q, z - dx * q);
+          if (a < side) side = a;
+          if (b < side) side = b;
+        }
+        level = Math.min(level, side + 1.0);
+      }
+      // How fast it is losing height right now. A river dropping faster than
+      // about a metre in eight is white water, and faster than one in three
+      // is a fall - which the surface mesh gets for nothing, because its own
+      // vertices are that steep.
+      const dropRate = k === 0 ? 0 : (prevH - bh) / RIVER_STEP;
+      prevH = bh;
+
+      // A river surface cannot be below the sea it drains into. On a steep
+      // coast a single 100 m step can carry the walk from above the waterline
+      // to twenty metres under it, and without this clamp the last point of
+      // the path sat on the seabed - which then registered as the biggest
+      // waterfall in the region, drawn nowhere, because the sea was already
+      // covering it.
+      level = Math.max(level, SEA_LEVEL);
+      px.push(x);
+      pz.push(z);
+      plv.push(level);
+      pfl.push(flow);
+      // White water only counts on a channel that is still above the sea.
+      pfa.push(bh > SEA_LEVEL + 1 ? saturate((dropRate - 0.12) / 0.23) : 0);
+      // Discharge grows downstream because the catchment feeding it does.
+      flow += 0.09 * (RIVER_STEP / 100);
+
+      if (bh < SEA_LEVEL + 0.6) {
+        // The sea. Nothing downstream of here belongs to the river.
+        reachedSea = true;
+        break;
+      }
+
+      // A lake swallows the river and hands it back at the lowest point of
+      // its rim, which is where a real outflow leaves one.
+      const L = this._lakeNear(x, z);
+      if (L && L !== seenLake) {
+        seenLake = L;
+        level = Math.min(level, L.level);
+        plv[plv.length - 1] = level;
+        const out = this._lakeOutlet(L);
+        x = out.x;
+        z = out.z;
+        dx = out.dx;
+        dz = out.dz;
+        prevH = this._bh(x, z);
+        continue;
+      }
+
+      const e = RIVER_GRAD_E;
+      let gx = this._bh(x - e, z) - this._bh(x + e, z);
+      let gz = this._bh(x, z - e) - this._bh(x, z + e);
+      const drop = Math.hypot(gx, gz);
+      const slope = drop / (2 * e);
+
+      if (slope < 0.0015) {
+        // Nearly level ground: the local gradient is noise. Look further out
+        // for a way down, the way standing water finds a spillway.
+        let bestH = bh;
+        let bx = 0;
+        let bz = 0;
+        for (let a = 0; a < 12; a++) {
+          const ang = (a / 12) * 6.2831853;
+          const sx = Math.cos(ang);
+          const sz = Math.sin(ang);
+          const hh = this._bh(x + sx * 260, z + sz * 260);
+          if (hh < bestH) {
+            bestH = hh;
+            bx = sx;
+            bz = sz;
+          }
+        }
+        if (bx || bz) {
+          gx = bx;
+          gz = bz;
+        } else {
+          stuck++;
+          if (stuck > 8) break;
+          gx = dx;
+          gz = dz;
+        }
+      } else {
+        stuck = 0;
+        gx /= drop;
+        gz /= drop;
+      }
+
+      // A river has inertia: it does not turn on the spot every time the
+      // ground under it tilts. Without this the walk zigzags across the
+      // valley floor wherever the slope is gentle.
+      dx = dx * 0.52 + gx * 0.48;
+      dz = dz * 0.52 + gz * 0.48;
+      let dl = Math.hypot(dx, dz) || 1;
+      dx /= dl;
+      dz /= dl;
+
+      // Meanders, sideways, and only where the ground is flat enough to let a
+      // river wander. On a steep grade it runs straight, as one does.
+      const mA = (1 - smoothstep(0.012, 0.055, slope)) * 0.55;
+      if (mA > 0.01) {
+        const m = this.n.river.fbm2(x * 0.00085, z * 0.00085, 2) * mA;
+        // Both components turn off the SAME direction: feeding the updated dx
+        // into dz would shear the vector instead of rotating it.
+        const ox = dx;
+        const oz = dz;
+        dx = ox - oz * m;
+        dz = oz + ox * m;
+        dl = Math.hypot(dx, dz) || 1;
+        dx /= dl;
+        dz /= dl;
+      }
+
+      x += dx * RIVER_STEP;
+      z += dz * RIVER_STEP;
+    }
+
+    if (px.length < 3) return null;
+
+    // Half-width and depth from the flow it has gathered. Real channels go
+    // roughly as the square root of their discharge, which is why a river
+    // that has come ninety kilometres is wide and a headwater brook is not.
+    const np = px.length;
+    const w = new Float32Array(np);
+    const dep = new Float32Array(np);
+    for (let k = 0; k < np; k++) {
+      w[k] = channelWidth(pfl[k]);
+      dep[k] = channelDepth(pfl[k]);
+    }
+
+    return {
+      i, j, tier, n: np, reachedSea,
+      x: new Float64Array(px),
+      z: new Float64Array(pz),
+      level: new Float32Array(plv),
+      flow: new Float32Array(pfl),
+      fall: new Float32Array(pfa),
+      w, depth: dep,
+    };
+  }
+
+  /** The lake whose water this point is standing in, if any. */
+  _lakeNear(x, z) {
+    const i0 = Math.floor(x / LAKE_CELL);
+    const j0 = Math.floor(z / LAKE_CELL);
+    for (let j = -1; j <= 1; j++) {
+      for (let i = -1; i <= 1; i++) {
+        const L = this.lakeCell(i0 + i, j0 + j);
+        if (L && dist2(L.x, L.z, x, z) < sq(L.r * 0.92)) return L;
+      }
+    }
+    return null;
+  }
+
+  /** Where a lake spills: the lowest point on its rim. */
+  _lakeOutlet(L) {
+    if (L.outlet) return L.outlet;
+    let bestH = Infinity;
+    let ba = 0;
+    for (let a = 0; a < 24; a++) {
+      const ang = (a / 24) * 6.2831853;
+      const hh = this._bh(L.x + Math.cos(ang) * L.r * 1.2, L.z + Math.sin(ang) * L.r * 1.2);
+      if (hh < bestH) {
+        bestH = hh;
+        ba = ang;
+      }
+    }
+    const cx = Math.cos(ba);
+    const cz = Math.sin(ba);
+    L.outlet = { x: L.x + cx * L.r * 1.25, z: L.z + cz * L.r * 1.25, dx: cx, dz: cz };
+    return L.outlet;
+  }
+
+  /**
+   * River presence at a point, from the segments the context tile collected.
+   * Fills `out` with strength, the water surface level, the channel's
+   * half-width and depth, the flow direction and how much of a fall it is.
+   */
+  _riverAt(x, z, ctx, out) {
+    out.strength = 0;
+    out.level = -Infinity;
+    out.width = 0;
+    out.depth = 0;
+    out.fall = 0;
+    out.dirX = 0;
+    out.dirZ = 0;
+    // `out` is a shared scratch object: leaving a stale distance behind would
+    // have the next point inherit this one's channel.
+    out.dist = undefined;
+    const segs = ctx.rivers;
+    if (!segs.length) return 0;
+
+    let bestD = Infinity;
+    let bx = 0, bz = 0, bw = 1, bl = 0, bdep = 0, bfall = 0, bflow = 0, bdx = 0, bdz = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const t = segT(s.ax, s.az, s.bx, s.bz, x, z);
+      const cx = s.ax + (s.bx - s.ax) * t;
+      const cz = s.az + (s.bz - s.az) * t;
+      const d = Math.sqrt(dist2(cx, cz, x, z));
+      if (d < bestD) {
+        bestD = d;
+        bx = cx;
+        bz = cz;
+        bw = s.wa + (s.wb - s.wa) * t;
+        bl = s.la + (s.lb - s.la) * t;
+        bdep = s.da + (s.db - s.da) * t;
+        bfall = s.fa + (s.fb - s.fa) * t;
+        bflow = s.qa + (s.qb - s.qa) * t;
+        bdx = s.dx;
+        bdz = s.dz;
+      }
+    }
+    if (bestD > bw * 6 + 30) return 0;
+
+    // Confluences. Two channels running down the same valley are two separate
+    // traces sitting on top of each other, so the water they carry adds up -
+    // which is exactly what makes the river below a junction bigger than
+    // either river above it.
+    let q = bflow;
+    // Only worth asking when we are actually near a channel; out on the bank
+    // this second pass would double the cost of every terrain vertex in the
+    // world for an answer nothing reads.
+    if (bestD > Math.max(bw * 8, 70)) {
+      out.strength = 0;
+      out.level = bl;
+      out.width = bw;
+      out.depth = bdep;
+      out.dist = bestD;
+      out.dirX = bdx;
+      out.dirZ = bdz;
+      return 0;
+    }
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const t = segT(s.ax, s.az, s.bx, s.bz, bx, bz);
+      const cx = s.ax + (s.bx - s.ax) * t;
+      const cz = s.az + (s.bz - s.az) * t;
+      const d2 = dist2(cx, cz, bx, bz);
+      if (d2 < 1.0) continue; // this is the channel we already counted
+      const k = smoothstep(sq(bw * 3.5), sq(bw * 0.8), d2);
+      if (k > 0) q += (s.qa + (s.qb - s.qa) * t) * k;
+    }
+    const W = channelWidth(q);
+    const depth = Math.max(bdep, channelDepth(q));
+
+    out.strength = 1 - smoothstep(W * 0.55, W, bestD);
+    out.level = bl;
+    out.width = W;
+    out.depth = depth;
+    out.fall = bfall;
+    out.dirX = bdx;
+    out.dirZ = bdz;
+    out.dist = bestD;
+    return out.strength;
+  }
+
+  /** Public: what the river is doing at a point. */
+  riverAt(x, z, out = {}) {
+    this._riverAt(x, z, this.context(x, z), out);
+    return out;
+  }
+
+  /**
+   * Every stretch of white water within range, for spray and for sound.
+   * Returns the point, how big a fall it is and how much water goes over it.
+   */
+  fallsNear(x, z, range = 260, out = []) {
+    out.length = 0;
+    const r2 = range * range;
+    for (let t = 0; t < RIVER_TIERS.length; t++) {
+      const T = RIVER_TIERS[t];
+      const r = Math.ceil((range + T.step * T.steps) / T.cell) + 1;
+      const i0 = Math.floor(x / T.cell);
+      const j0 = Math.floor(z / T.cell);
+      for (let j = -r; j <= r; j++) {
+        for (let i = -r; i <= r; i++) {
+          const p = this.riverCell(i0 + i, j0 + j, t);
+          if (!p) continue;
+          for (let k = 1; k < p.n; k++) {
+            if (p.fall[k] < 0.25) continue;
+            if (p.level[k] <= SEA_LEVEL + 0.5) continue;
+            if (dist2(p.x[k], p.z[k], x, z) > r2) continue;
+            out.push({
+              x: p.x[k], z: p.z[k], y: p.level[k],
+              fall: p.fall[k], flow: p.flow[k], w: p.w[k],
+              drop: Math.max(0, p.level[k - 1] - p.level[k]),
+            });
+          }
+        }
+      }
+    }
+    return out;
   }
 
   /* ---------------------------------------------------------------- height */
@@ -932,6 +1380,7 @@ export class WorldGen {
     QB.temperature = sh.tSea - Math.max(0, sh.baseH) * 0.0068;
     QB.moisture = sh.moist0;
     QB.riverStrength = 0;
+    QB.floodplain = 0;
     QB.lake = 0;
     QB.mountain = sh.mountain;
     QB.dune = sh.dune;
@@ -1057,35 +1506,71 @@ export class WorldGen {
     }
 
     /* -- rivers ------------------------------------------------------------ */
+    // The channel is cut to fit the water, not the other way round. Because
+    // the traced surface only ever falls, cutting the ground down to it can
+    // only ever produce a river lying in a valley - there is no combination
+    // of terrain and channel that leaves water perched on a slope.
     let riverStrength = 0;
+    let riverFall = 0;
+    let floodplain = 0;
     TMPR.level = baseH - 1.6;
-    if (baseH > -4 && baseH < 1220) {
-      const rv = this.river(x, z, baseH, TMPR, sh.moist0);
-      if (rv > 0.002) {
-        const depth = 0.9 + 5.5 * rv;
-        const bed = TMPR.level - depth;
-        // Reaching full cut by mid-band (0.6, not 0.85) is what actually
-        // sinks the channel: at the old curve most of the band was carved a
-        // fifth of the way to the bed, so the water sat on the land instead
-        // of in it.
-        const k = smoothstep(0.0, 0.6, rv);
-        h = lerp(h, Math.min(h, bed), k);
-        riverStrength = rv;
-        if (h < TMPR.level && rv > 0.05) waterLevel = Math.max(waterLevel, TMPR.level);
+    this._riverAt(x, z, ctx, TMPR);
+    if (TMPR.level > -Infinity && TMPR.dist !== undefined) {
+      const W = TMPR.width;
+      const d = TMPR.dist;
+      const lvl = TMPR.level;
+      // Banks first: a broad, shallow trough four channel-widths across,
+      // pulled down to just above the waterline. This is the valley you see
+      // from a distance and the reason a river reads as belonging to the
+      // country it crosses.
+      // A valley floor is alluvium: flat, smooth stuff the river laid down.
+      // `_shape` has already added up to eight metres of fine detail by this
+      // point, and left in place it punches straight through the banks - the
+      // tracer works on a 100 m lattice and cannot see a gully that small, so
+      // the water ends up standing higher than ground a few strides away.
+      // Damping the detail here fixes the containment and is what a river
+      // valley actually looks like. The floor is never narrower than about
+      // forty metres, or a brook gets no valley at all.
+      const vw = Math.max(W * 4.6, 42);
+      const bank = 1 - smoothstep(W * 1.1, vw, d);
+      if (bank > 0.002) {
+        h = lerp(h, baseH, bank * 0.85);
+        h = lerp(h, Math.min(h, lvl + 1.6), bank * 0.8);
       }
+      // Then the channel itself, cut to the bed with a rounded profile so the
+      // bottom is a trough rather than a slot.
+      const chan = 1 - smoothstep(W * 0.35, W * 1.02, d);
+      if (chan > 0.002) {
+        const prof = Math.sqrt(Math.max(0, 1 - sq(Math.min(1, d / (W * 1.05)))));
+        h = lerp(h, Math.min(h, lvl - TMPR.depth * prof), chan);
+      }
+      riverStrength = TMPR.strength;
+      riverFall = TMPR.fall;
+      // The floodplain: ground the river does not cover but does keep wet.
+      // Traced channels are crisp and narrow where the old noise band was a
+      // broad smear, and without this the marshes and bogs that used to line
+      // a river vanished with it - the survey's "kinds of country within
+      // 10 km" fell from 3 to 2 on that alone.
+      floodplain = 1 - smoothstep(W * 1.2, vw * 1.15, d);
+      if (riverStrength > 0.02 && h < lvl) waterLevel = Math.max(waterLevel, lvl);
     }
 
     if (h < SEA_LEVEL) waterLevel = Math.max(waterLevel, SEA_LEVEL);
 
     /* -- climate ----------------------------------------------------------- */
     const temperature = sh.tSea - Math.max(0, h) * 0.0068;
-    const moisture = saturate(sh.moist0 + riverStrength * 0.25 + lakeAmt * 0.2);
+    const moisture = saturate(sh.moist0 + riverStrength * 0.25 + lakeAmt * 0.2 + floodplain * 0.20);
 
     out.height = h;
     out.baseHeight = baseH;
     out.waterLevel = waterLevel;
     out.riverStrength = riverStrength;
     out.riverLevel = TMPR.level;
+    out.riverFall = riverFall;
+    out.floodplain = floodplain;
+    out.riverWidth = TMPR.dist !== undefined ? TMPR.width : 0;
+    out.riverFlowX = TMPR.dirX;
+    out.riverFlowZ = TMPR.dirZ;
     out.lake = lakeAmt;
     out.continent = cont;
     out.mountain = sh.mountain;
@@ -1165,7 +1650,7 @@ export class WorldGen {
     /* --- standing water and the ground beside it -------------------------- */
     // Wetland is about drainage, not rainfall: flat ground that cannot shed
     // what falls on it. Raw moisture is the right measure here.
-    if (moist > 0.62 && h < 150 && (s.lake > 0.05 || s.riverStrength > 0.05 || lf.basin > 0.34)) {
+    if (moist > 0.62 && h < 150 && (s.lake > 0.05 || s.riverStrength > 0.05 || s.floodplain > 0.4 || lf.basin > 0.34)) {
       if (temp > 21) return BIOME.SWAMP;
       if (temp > 7) return BIOME.MARSH;
       if (temp > -4) return BIOME.BOG;
@@ -1268,8 +1753,19 @@ export class WorldGen {
     return this.sample(x, z, this._s).waterLevel;
   }
 
-  /** Downhill flow direction of a river at a point (unit 2D vector). */
+  /**
+   * Which way the water is going at a point (unit 2D vector). On a river this
+   * is the traced channel's own tangent, which is the direction the water
+   * genuinely runs; the local terrain gradient it used to use pointed at the
+   * near bank as often as downstream.
+   */
   flowDir(x, z, out = [0, 0]) {
+    const r = this._riverAt(x, z, this.context(x, z), TMPR2);
+    if (r > 0.01 && (TMPR2.dirX || TMPR2.dirZ)) {
+      out[0] = TMPR2.dirX;
+      out[1] = TMPR2.dirZ;
+      return out;
+    }
     const e = 26;
     const a = this.baseHeight(x + e, z) - this.baseHeight(x - e, z);
     const b = this.baseHeight(x, z + e) - this.baseHeight(x, z - e);
@@ -1471,15 +1967,29 @@ const SPAWN_BIOMES = new Set([
 
 const TMP2 = [0, 0];
 const TMP3 = [0, 0, 0];
-const TMPR = { strength: 0, width: 0, level: 0 };
+const TMPR = { strength: 0, width: 0, level: 0, depth: 0, fall: 0, dirX: 0, dirZ: 0, dist: undefined };
+// flowDir is called from inside the water mesher while `sample` is midway
+// through its own river lookup, so it cannot share TMPR.
+const TMPR2 = { strength: 0, width: 0, level: 0, depth: 0, fall: 0, dirX: 0, dirZ: 0, dist: undefined };
 const TMPW = {};
 const TMPS = {};
 const TMPS2 = {};
 const TMPS3 = {};
+const TMPS4 = {};
 const QB = {};
 
 function sq(v) {
   return v * v;
+}
+
+// Hydraulic geometry: a channel's width and depth both go roughly as the
+// square root of what it carries, which is why a brook is a stride across and
+// the river it feeds is not, without either of them being authored.
+function channelWidth(q) {
+  return clamp(1.9 * Math.sqrt(q), 1.0, 46);
+}
+function channelDepth(q) {
+  return 0.35 + 0.75 * Math.sqrt(q);
 }
 /** Push a roughly-gaussian noise value out toward its extremes. */
 function expand(v, p) {

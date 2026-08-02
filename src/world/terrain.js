@@ -109,6 +109,7 @@ export class Terrain {
       wg.setAttribute('position', new THREE.BufferAttribute(data.water.positions, 3));
       wg.setAttribute('flow', new THREE.BufferAttribute(data.water.flow, 2));
       wg.setAttribute('depth', new THREE.BufferAttribute(data.water.depth, 1));
+      wg.setAttribute('fall', new THREE.BufferAttribute(data.water.fall, 1));
       wg.setIndex(new THREE.BufferAttribute(data.water.indices, 1));
       wg.computeBoundingSphere();
       const wm = new THREE.Mesh(wg, this.waterMaterial);

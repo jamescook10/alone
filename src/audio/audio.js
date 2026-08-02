@@ -328,6 +328,26 @@ export class Audio {
     this.rainGain.connect(this.dry);
     this.reverbSendFrom(this.rainGain, 0.2);
 
+    /* waterfalls -------------------------------------------------------- */
+    // Its own bus, not a louder brook: a fall is broadband and bottom-heavy,
+    // and it has to be able to sit under the babble of the river it is part
+    // of rather than replace it.
+    this.fallGain = ctx.createGain();
+    this.fallGain.gain.value = 0;
+    this.fallFilter = ctx.createBiquadFilter();
+    this.fallFilter.type = 'lowpass';
+    this.fallFilter.frequency.value = 1100;
+    this.fallFilter.Q.value = 0.5;
+    // Carries much further than a brook, so a longer maxDistance and a
+    // gentler rolloff: you hear a fall before you can see where it is.
+    this.fallPanner = this.panner(0, 0, 0, 10, 420, 1.1);
+    this.fallPanner.panningModel = 'HRTF';
+    this._loop(this.noise, 1.0, this.fallFilter);
+    this.fallFilter.connect(this.fallGain);
+    this.fallGain.connect(this.fallPanner);
+    this.fallPanner.connect(this.dry);
+    this.reverbSendFrom(this.fallGain, 0.45);
+
     /* insects and night ------------------------------------------------ */
     this.insectGain = ctx.createGain();
     this.insectGain.gain.value = 0;
@@ -961,6 +981,22 @@ export class Audio {
         };
       }
       if (bestD < 3) break;
+    }
+
+    // A fall, if there is one within earshot. It is found by the world at a
+    // few hertz rather than probed for here, because it comes straight off
+    // the traced channel rather than out of a terrain search.
+    const fall = w.nearestFall;
+    if (fall) {
+      this.movePanner(this.fallPanner, fall.x, fall.y, fall.z, 0.3);
+      const size = clamp(fall.fall * (0.35 + Math.sqrt(fall.flow) * 0.30), 0, 1.6);
+      const near = clamp(1 - fall.dist / 380, 0, 1);
+      this.fallGain.gain.setTargetAtTime(near * near * size * 0.30 * (under ? 0.4 : 1), now, 0.5);
+      // Close up you hear the individual water hitting the pool; from far off
+      // only the low roar survives the air between you and it.
+      this.fallFilter.frequency.setTargetAtTime(lerp(700, 2400, near), now, 0.6);
+    } else {
+      this.fallGain.gain.setTargetAtTime(0, now, 1.0);
     }
 
     if (!best) {

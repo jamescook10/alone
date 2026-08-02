@@ -189,6 +189,7 @@ function build(req) {
   const gfarm = new Float32Array(gw * gw);
   const gsite = new Float32Array(gw * gw);
   const gdune = new Float32Array(gw * gw);
+  const gfall = new Float32Array(gw * gw);
   const s = {};
   let minY = Infinity;
   let maxY = -Infinity;
@@ -212,6 +213,7 @@ function build(req) {
       gfarm[k] = s.farm;
       gsite[k] = s.siteInfluence;
       gdune[k] = s.dune;
+      gfall[k] = s.riverFall || 0;
     }
   }
 
@@ -342,13 +344,10 @@ function build(req) {
 
   // --- inland water surface ----------------------------------------------
   if (wantWater) {
-    // Far tiers only mesh water that stands ABOVE the sea: the horizon plate
-    // already plays the sea out there, and doubling it up would buy nothing
-    // but moire and overdraw.
-    const water = buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, lod >= 5);
+    const water = buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, gfall, lod);
     if (water) {
       payload.water = water;
-      transfer.push(water.positions.buffer, water.flow.buffer, water.depth.buffer, water.indices.buffer);
+      transfer.push(water.positions.buffer, water.flow.buffer, water.depth.buffer, water.fall.buffer, water.indices.buffer);
     }
   }
 
@@ -544,26 +543,38 @@ function hashNoise(x, y) {
 
 /* -------------------------------------------------------------- water mesh */
 
-function buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, inlandOnly = false) {
+function buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, gfall, lod = 0) {
+  // Far tiers only mesh water that stands ABOVE the sea: the horizon plate
+  // already plays the sea out there, and doubling it up would buy nothing but
+  // moire and overdraw.
+  const inlandOnly = lod >= 5;
   // Water is emitted per cell wherever the surface sits above the ground.
   const wet = new Uint8Array((res + 1) * (res + 1));
-  let any = false;
+  let wetCount = 0;
   for (let j = 0; j <= res; j++) {
     for (let i = 0; i <= res; i++) {
       const gi = (j + 1) * gw + (i + 1);
       if (inlandOnly && gwater[gi] < SEA_LEVEL + 0.5) continue;
       if (gwater[gi] > -9000 && gh[gi] < gwater[gi] + 0.35) {
         wet[j * (res + 1) + i] = 1;
-        any = true;
+        wetCount++;
       }
     }
   }
-  if (!any) return null;
+  if (!wetCount) return null;
+  // A brook two metres across is invisible from a quarter of a mile, and a
+  // water mesh is a draw call whether it covers a lake or a puddle. Once the
+  // traced network put a stream in most valleys, meshing every one of them at
+  // every tier took the frame from 204 draw calls to 326. Coarse chunks only
+  // mesh water with the area to earn its call.
+  const minArea = lod <= 1 ? 0 : lod <= 3 ? 1100 : 9000;
+  if (wetCount * step * step < minArea) return null;
 
   const map = new Int32Array((res + 1) * (res + 1)).fill(-1);
   const pos = [];
   const flow = [];
   const dep = [];
+  const fall = [];
   let n = 0;
   for (let j = 0; j <= res; j++) {
     for (let i = 0; i <= res; i++) {
@@ -601,12 +612,21 @@ function buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, inlandOnly 
       const riv = griver[gi];
       if (riv > 0.02) {
         const fd = wg.flowDir(wx, wz, TMPF);
-        const speed = clamp(0.25 + riv * 1.4, 0, 2);
+        // Speed comes from the channel's GRADIENT, not from how firmly this
+        // vertex is inside the river. Strength is ~1 everywhere in a traced
+        // channel, so pricing speed on it made every river in the world run
+        // at a torrent - and the churn foam that rides on speed turned all of
+        // them into boiling silver. A river on a flat floodplain is slow.
+        const speed = clamp(0.30 + gfall[gi] * 1.7, 0, 2);
         flow.push(fd[0] * speed, fd[1] * speed);
       } else {
         flow.push(0, 0);
       }
       dep.push(Math.max(0, level - gh[gi]));
+      // How steeply the channel is dropping here. White water has to come off
+      // the traced gradient: derived from flow speed instead, every river in
+      // the world came out boiling, because a placid river still moves.
+      fall.push(gfall[gi]);
     }
   }
   if (n < 3) return null;
@@ -630,6 +650,7 @@ function buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, inlandOnly 
     positions: new Float32Array(pos),
     flow: new Float32Array(flow),
     depth: new Float32Array(dep),
+    fall: new Float32Array(fall),
     indices: new Uint32Array(idx),
     count: n,
   };

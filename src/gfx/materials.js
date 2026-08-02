@@ -95,6 +95,7 @@ export function makeTerrainMaterial() {
       uniform float uWetness;
       uniform float uRain;
       uniform float uTime;
+      uniform float uWaterY;
       uniform float uSnowAmount;
       uniform float uClimateTemp;
       varying vec4 vAux;
@@ -197,6 +198,40 @@ export function makeTerrainMaterial() {
       }
     `,
     emissiveFragment: /* glsl */ `
+      {
+        // Caustics. Sunlight refracted through a rippled surface focuses into
+        // a moving web on whatever is underneath it, and its absence is most
+        // of why shallow water read as a flat pane laid over the ground.
+        // uWaterY is the surface height of the nearest water, so the ground
+        // can work out its own depth without carrying one per vertex.
+        // vAux.x is the per-vertex submersion the worker baked: 0.5 exactly at
+        // the waterline and above it underneath. uWaterY alone is a single
+        // number for the whole frame, so on its own it painted caustics onto
+        // every dry field in view that happened to lie below the height of a
+        // pond half a mile away. The mask says WHETHER, the uniform says how
+        // deep.
+        float submerged = smoothstep( 0.52, 0.78, vAux.x );
+        float sub = uWaterY - vWorldPos.y;
+        if ( submerged > 0.01 && sub > 0.02 && sub < 26.0 && uSunDir.y > 0.02 ) {
+          vec2 cp = vWorldPos.xz;
+          float ct = uTime * 0.5;
+          // Two counter-drifting ridged layers. Where their crests cross you
+          // get the bright knot; the high power is what makes it a web of
+          // thin lines instead of a wash.
+          // Roughly half-metre cells. The first pass ran an octave lower and
+          // the web came out as metre-and-a-half blobs that filled the screen
+          // when you stood over a pool and read as a stain, not as light.
+          float c1 = 1.0 - abs( cnoise( cp * 2.3 + vec2( ct * 0.33, -ct * 0.21 ) ) * 2.0 - 1.0 );
+          float c2 = 1.0 - abs( cnoise( cp * 3.5 - vec2( ct * 0.25, ct * 0.29 ) ) * 2.0 - 1.0 );
+          float caus = pow( clamp( c1 * c2, 0.0, 1.0 ), 4.0 );
+          // Brightest just under the surface and gone once the light has been
+          // scattered out of the beam. Faded out with distance as well, or the
+          // web aliases into a shimmer across a whole lake.
+          float k = submerged * smoothstep( 0.0, 0.45, sub ) * ( 1.0 - smoothstep( 3.5, 24.0, sub ) )
+            * ( 1.0 - smoothstep( 45.0, 130.0, distance( vWorldPos, cameraPosition ) ) );
+          totalEmissiveRadiance += uSunColor * caus * k * 0.85 * uSunDir.y;
+        }
+      }
       if ( gPuddle > 0.002 ) {
         // Falling rain keeps a puddle shivering; still air leaves it a mirror.
         vec2 wp2 = vWorldPos.xz;
@@ -251,6 +286,7 @@ const GERSTNER_GLSL = GERSTNER_WAVES.map(([dx, dz, L, A, Q], i) => {
 const WATER_VERT = /* glsl */ `
   attribute vec2 flow;
   attribute float depth;
+  attribute float fall;
   uniform float uTime;
   uniform float uWaveScale;
   uniform float uWindStrength;
@@ -258,15 +294,24 @@ const WATER_VERT = /* glsl */ `
   varying vec2 vFlow;
   varying float vDepth;
   varying float vCrest;
+  varying float vFall;
 
   void main() {
     vec4 wp = modelMatrix * vec4( position, 1.0 );
     vFlow = flow;
     vDepth = depth;
-    // Waves flatten in the shallows and in rivers, where flow takes over -
-    // and the sea state follows the wind: glass at dawn, whitecaps in a storm.
+    vFall = fall;
+    // Waves flatten in the shallows and in rivers, and the sea state follows
+    // the wind: glass at dawn, whitecaps in a storm.
+    //
+    // Running water is flagged by having any flow at all, NOT by how fast it
+    // is going. Damping on speed looks equivalent and is not: once river
+    // speed came off the channel gradient rather than off "am I in a river",
+    // every placid river in the world stopped being damped and grew a half
+    // metre of ocean swell, which at a bank read as a strip of choppy silver.
     float shore = clamp( depth / 2.5, 0.0, 1.0 );
-    float amp = uWaveScale * shore * ( 1.0 - clamp( length( flow ) * 0.8, 0.0, 0.85 ) )
+    float running = step( 0.01, length( flow ) );
+    float amp = uWaveScale * shore * ( 1.0 - running * 0.86 )
       * ( 0.45 + clamp( uWindStrength, 0.0, 1.5 ) * 0.75 );
     vec2 p0 = wp.xz;
     float crest = 0.0;
@@ -286,9 +331,22 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uShallow;
   uniform float uWindStrength;
   uniform float uRain;
+  uniform float uWade;
+  // ATMO_PARS does not declare this one, and a ShaderMaterial gets no
+  // automatic declarations the way a patched built-in material does. Using it
+  // undeclared failed the whole water program to compile, and a failed
+  // program draws nothing at all - so every lake and river in the world went
+  // invisible while the lit riverbed underneath went on looking convincing
+  // enough to send me hunting for a foam bug that was never there.
+  uniform vec3 uPlayerPos;
   varying vec2 vFlow;
   varying float vDepth;
   varying float vCrest;
+  varying float vFall;
+
+  float whash( vec2 p ) {
+    return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+  }
 
   void main() {
     vec3 dv = cameraPosition - vWorldPos;
@@ -306,13 +364,24 @@ const WATER_FRAG = /* glsl */ `
     // look hand-made instead of simulated.
     vec3 N = normalize( cross( dFdx( vWorldPos ), dFdy( vWorldPos ) ) );
     if ( dot( N, V ) < 0.0 ) N = -N;
+    float ndv = abs( dot( N, V ) );
 
-    // Body colour by depth, with a fresnel tint toward the sky's horizon
-    // stop standing in for reflection.
-    float deepK = clamp( vDepth / 22.0, 0.0, 1.0 );
-    deepK = deepK * ( 2.0 - deepK );
-    vec3 body = mix( uShallow, uDeep, deepK );
-    float fres = pow( 1.0 - clamp( dot( N, V ), 0.0, 1.0 ), 3.0 );
+    // How hard the channel is dropping, straight off the traced gradient.
+    // This is deliberately NOT read from the surface normal: on a displaced
+    // Gerstner mesh the derivative normal tips about on every wavelet, and
+    // deriving white water from it - or from flow speed, which a placid river
+    // also has - painted every river in the world boiling silver.
+    float chute = smoothstep( 0.22, 0.75, vFall );
+
+    // Body colour by how far light has had to travel through it. An
+    // exponential is the honest curve and it matters: the old linear ramp hit
+    // near-opaque at a metre and a half, so every brook and every shallow was
+    // a flat slab of blue-green with the bed it was standing on invisible
+    // underneath. Water a few inches deep should show you the gravel.
+    float clarity = 3.4;
+    float opt = 1.0 - exp( -vDepth / clarity );
+    vec3 body = mix( uShallow, uDeep, opt );
+    float fres = pow( 1.0 - clamp( ndv, 0.0, 1.0 ), 3.0 );
     vec3 col = mix( body, uHorizonColor, 0.10 + fres * 0.60 );
 
     // Sun sparkle off the facets - dulled while rain roughens the surface.
@@ -325,8 +394,12 @@ const WATER_FRAG = /* glsl */ `
     // fleck on the crests - a low threshold painted every shallow in white.
     float speed = length( vFlow );
     vec2 adv = vFlow * uTime * 0.55;
-    float shoreFoam = smoothstep( 0.7, 0.04, vDepth );
-    float churn = smoothstep( 0.55, 1.5, speed );
+    // The waterline is not a fixed contour: a wave runs up the sand and
+    // drains back off it. The phase runs along the shore so the whole coast
+    // does not breathe in unison.
+    float surge = sin( uTime * 0.5 + ( p.x + p.y ) * 0.021 ) * 0.5 + 0.5;
+    float shoreFoam = smoothstep( 0.35 + surge * 0.75, 0.02, vDepth );
+    float churn = smoothstep( 0.95, 1.8, speed );
     float fn = texture2D( tDetail, p * 0.045 - adv * 0.08 + vec2( uTime * 0.02, 0.0 ) ).r;
     float fn2 = texture2D( tDetail, p * 0.11 + adv * 0.03 ).g;
     float whitecap = smoothstep( 0.80, 1.10, vCrest ) * smoothstep( 0.6, 1.3, uWindStrength );
@@ -334,22 +407,54 @@ const WATER_FRAG = /* glsl */ `
       + churn * smoothstep( 0.55, 0.85, fn2 ) * 0.85
       + whitecap * smoothstep( 0.55, 0.80, fn2 );
     // Hard-edged foam patches, not a soft wash: quantising the mask keeps it
-    // in the same graphic language as the flat facets.
-    foam = smoothstep( 0.34, 0.48, foam ) * farK;
+    // in the same graphic language as the flat facets. The grazing-angle fade
+    // is what stops the speckle crawling along the shoreline as you turn:
+    // a world-space texture read at a glancing angle aliases however far away
+    // it is, so distance alone was never enough to hide it.
+    foam = smoothstep( 0.34, 0.48, foam ) * farK * smoothstep( 0.02, 0.20, ndv );
     col = mix( col, vec3( 0.97, 0.99, 1.0 ), clamp( foam, 0.0, 0.9 ) );
 
-    // Rain pocks the surface: a boiling stipple of drop rings, dense in a
-    // downpour, sparse flecks in drizzle. Same distance cutoff as the foam -
-    // past that it would alias into crawling white noise.
-    if ( uRain > 0.02 && farK > 0.01 ) {
-      float rp = texture2D( tDetail, p * 0.21 + vec2( uTime * 0.11, uTime * 0.087 ) ).g;
-      float rp2 = texture2D( tDetail, p * 0.43 - vec2( uTime * 0.13, -uTime * 0.09 ) ).r;
-      float pock = smoothstep( 0.90 - uRain * 0.22, 0.97, rp * 0.6 + rp2 * 0.4 );
-      col = mix( col, vec3( 0.85, 0.90, 0.94 ), pock * uRain * 0.8 * farK );
+    // White water. Anywhere the surface is falling steeply, or moving fast
+    // over a broken bed, the water is full of air and stops being a mirror.
+    if ( chute > 0.01 ) {
+      // Fast water over a steepening bed breaks up before it actually falls,
+      // so speed adds to a gradient that is already there - it never starts
+      // white water on its own.
+      float rapids = chute * ( 0.55 + 0.45 * smoothstep( 0.6, 1.8, speed ) );
+      // Torn downward, fast, so a fall reads as moving rather than painted.
+      float wn = texture2D( tDetail, p * vec2( 0.5, 0.16 ) + vec2( 0.0, -uTime * 1.3 ) ).r;
+      float wn2 = texture2D( tDetail, p * 0.9 - vec2( 0.0, uTime * 2.1 ) ).g;
+      float white = clamp( rapids, 0.0, 1.0 ) * ( 0.45 + 0.75 * wn * wn2 * 2.0 );
+      col = mix( col, vec3( 0.95, 0.98, 1.0 ), clamp( white, 0.0, 0.94 ) * farK );
+      foam = max( foam, clamp( white, 0.0, 0.9 ) * 0.8 );
     }
 
-    float alpha = mix( 0.55, 0.93, clamp( vDepth / 1.6, 0.0, 1.0 ) );
-    alpha = clamp( alpha + fres * 0.25 + foam * 0.6, 0.0, 1.0 );
+    // Rain rings. Every drop that lands throws a ring that expands and dies,
+    // which is what rain on water actually looks like - the earlier version
+    // was a stipple that boiled in place and read as static.
+    if ( uRain > 0.02 && farK > 0.01 ) {
+      vec2 rp = p * 1.25;
+      vec2 ci = floor( rp );
+      vec2 cf = fract( rp ) - 0.5;
+      float rh = whash( ci );
+      float ph = fract( uTime * 1.7 + rh * 11.0 );
+      float rad = ph * 0.44;
+      float d = length( cf );
+      float ring = smoothstep( rad, rad - 0.07, d ) * smoothstep( rad - 0.15, rad - 0.06, d );
+      ring *= ( 1.0 - ph ) * step( rh, uRain * 0.85 );
+      col = mix( col, vec3( 0.88, 0.93, 0.97 ), clamp( ring, 0.0, 1.0 ) * 0.55 * farK );
+    }
+
+    // Rings spreading from someone standing in it.
+    if ( uWade > 0.01 ) {
+      float pd = distance( p, uPlayerPos.xz );
+      float w = sin( pd * 2.6 - uTime * 5.5 ) * exp( -pd * 0.5 ) * uWade;
+      col += vec3( 0.05, 0.06, 0.06 ) * w;
+    }
+
+    // Opacity follows the same extinction as the colour, so the bed shows
+    // through the shallows and only real depth hides it.
+    float alpha = clamp( opt * 0.94 + fres * 0.26 + foam * 0.7 + chute * 0.45, 0.05, 1.0 );
 
     if ( uUnderwater > 0.5 ) {
       // Seen from below the surface is a shifting mirror.
