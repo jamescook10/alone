@@ -54,6 +54,10 @@ screen for real people. Always, before pushing:
    stroke - forcing each, because most of them happen on a few nights a year
    and you cannot wait for one. Pass a substring as the fourth argument to
    shoot only the matching frames.
+7. If you touched water or rain, `npm run watershots -- shots/` instead. It
+   stands you at a lake shore, beside a river, in a soaked storm (puddles,
+   heavy streaks, droplets on the lens) and in drizzle - postcards only ever
+   catches whatever weather it happens to get, which is usually none.
 
 If you push something that turns out to be broken, revert first and diagnose
 second: `git revert <sha> && git push origin main` puts players back on a

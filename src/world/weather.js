@@ -44,7 +44,9 @@ void main() {
   vec3 toCam = normalize( cameraPosition - world );
   vec3 up = normalize( mix( vec3( 0.0, 1.0, 0.0 ), normalize( vec3( -uWind.x * 0.25, -1.0, -uWind.y * 0.25 ) ), 1.0 - uSnow ) );
   vec3 right = normalize( cross( up, toCam ) );
-  float w = uSize * mix( 0.014, 0.30, uSnow ) * ( 0.6 + aSeed * 0.8 );
+  // 0.014 was sub-pixel for drizzle-sized drops, and MSAA thinned the streak
+  // to nothing: light rain was completely invisible.
+  float w = uSize * mix( 0.020, 0.30, uSnow ) * ( 0.6 + aSeed * 0.8 );
   float h = uSize * mix( 1.0, 0.30, uSnow ) * ( 0.6 + aSeed * 0.8 );
   world += right * position.x * w + up * position.y * h;
 
@@ -482,6 +484,7 @@ export class Weather {
     atmo.uWind.value.copy(this.windDir);
     atmo.uWindStrength.value = this.wind;
     atmo.uWetness.value = this.wetness;
+    atmo.uRain.value = this.rain;
     // Only what has actually fallen. Permanent snow - the line up a mountain,
     // the white of a tundra - now comes from uClimateTemp, which every
     // material evaluates against its own altitude.
@@ -503,14 +506,21 @@ export class Weather {
       u.uWind.value.copy(this.windDir).multiplyScalar(this.wind * 3.2);
       const snowy = this.snow > this.rain ? 1 : 0;
       u.uSnow.value = lerp(u.uSnow.value, snowy, 1 - Math.exp(-dt * 2));
-      u.uFall.value = lerp(24, 2.6, u.uSnow.value);
-      u.uSize.value = lerp(2.2, 0.42, u.uSnow.value);
+      // Rain is not one thing: drizzle is a slow mist of flecks you mostly
+      // hear, a downpour is fat streaks driven past you. Size and fall speed
+      // follow the intensity, so the two read as different weather rather
+      // than more or fewer copies of the same drop.
+      const heavy = smoothstep(0.15, 0.85, this.rain);
+      u.uFall.value = lerp(lerp(9, 27, heavy), 2.6, u.uSnow.value);
+      u.uSize.value = lerp(lerp(0.9, 2.8, heavy), 0.42, u.uSnow.value);
       u.uColor.value.setRGB(
         lerp(0.62, 0.95, u.uSnow.value),
         lerp(0.70, 0.96, u.uSnow.value),
         lerp(0.85, 1.0, u.uSnow.value)
       );
-      u.uOpacity.value = clamp(amt * lerp(0.30, 0.85, u.uSnow.value), 0, 1);
+      // Sub-linear in amount, or drizzle vanishes entirely: 0.12 rain still
+      // deserves a visible mist.
+      u.uOpacity.value = clamp(Math.pow(amt, 0.75) * lerp(lerp(0.55, 0.30, heavy), 0.85, u.uSnow.value), 0, 1);
       u.uShelter.value = this.shelter;
       this.precip.geometry.instanceCount = Math.floor(this.precipCount * clamp(amt * 1.3, 0.05, 1));
     }

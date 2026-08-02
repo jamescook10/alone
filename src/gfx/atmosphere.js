@@ -26,6 +26,10 @@ export const atmo = {
   uWind: { value: new THREE.Vector2(1, 0) },
   uWindStrength: { value: 0.4 },
   uWetness: { value: 0 },
+  // Rain actually falling on you right now, 0..1 - distinct from uWetness,
+  // which is how soaked the ground is and lingers after the shower has gone.
+  // Drives the ripple agitation on puddles and open water.
+  uRain: { value: 0 },
   // Fresh snowfall lying on top of everything, 0..1, from the weather.
   uSnowAmount: { value: 0 },
   // Sea-level air temperature of the region you are standing in. Everything

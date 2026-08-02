@@ -12,6 +12,7 @@
     "tour": "node scripts/tour.mjs",
     "survey": "node scripts/survey.mjs",
     "postcards": "node scripts/postcards.mjs",
+    "watershots": "node scripts/watershots.mjs",
     "skyshots": "node scripts/skyshots.mjs",
     "flight": "node scripts/flight.mjs"
   },

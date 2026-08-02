@@ -499,7 +499,27 @@ export class WorldGen {
       const wet = sh.moist0 + sh.lf.basin * 0.35;
       if (bh > 8 && bh < 780 && wet > 0.34) {
         const r = 60 + hash3f(i, j, this.seed ^ 0x77) * 230 * (0.6 + sh.lf.basin);
-        c = { x, z, r, level: bh + 1.0, depth: 5 + hash3f(i, j, this.seed ^ 0x99) * 20 };
+        // A lake needs country that will hold it. The bowl carve only pushes
+        // the ground down INSIDE the rim; if the natural ground at the rim
+        // already falls below the surface, the downhill edge stood as a disc
+        // of water proud of the hillside - which from below looked like a
+        // ceiling of sea with fish swimming in the air under it. Sample the
+        // rim, drop the surface to sit under its lowest point, and if that
+        // would sink the lake into a crater, leave the cell dry.
+        let minRim = Infinity;
+        for (let k = 0; k < 12; k++) {
+          const a = k * 0.5235988;
+          const rim = Math.min(
+            this.baseHeight(x + Math.cos(a) * r * 0.95, z + Math.sin(a) * r * 0.95),
+            this.baseHeight(x + Math.cos(a) * r * 1.15, z + Math.sin(a) * r * 1.15),
+            this.baseHeight(x + Math.cos(a) * r * 1.35, z + Math.sin(a) * r * 1.35)
+          );
+          if (rim < minRim) minRim = rim;
+        }
+        const level = Math.min(bh + 1.0, minRim - 0.6);
+        if (level > bh - 7) {
+          c = { x, z, r, level, depth: 5 + hash3f(i, j, this.seed ^ 0x99) * 20 };
+        }
       }
     }
     this._lakeCells.set(key, c);
@@ -859,9 +879,28 @@ export class WorldGen {
     let s = 1 - smoothstep(w * 0.30, w, d);
     // No rivers under the sea, and they fade out on high peaks.
     s *= smoothstep(-1.0, 7.0, baseH) * smoothstep(1150, 780, baseH);
+    let level = baseH - 1.6;
+    if (s > 0.002) {
+      // A river channel is a noise band, not a drainage network, so nothing
+      // used to stop one traversing a mountain flank - and its surface, tied
+      // to the local base height, draped down the hillside like a wet ribbon.
+      // Land's median base slope is 0.09 and rivers used to reach 2.0; the
+      // gate fades over 0.16..0.38, which kills the cliff-face ribbons and
+      // keeps the valley floors. The two extra baseHeight calls only run
+      // inside the narrow river band, where they are worth paying for.
+      const e = 24;
+      const gx = this.baseHeight(x + e, z) - baseH;
+      const gz = this.baseHeight(x, z + e) - baseH;
+      const slope = Math.hypot(gx, gz) / e;
+      s *= 1 - smoothstep(0.16, 0.38, slope);
+      // What slope survives the gate digs in: sinking the surface with the
+      // grade keeps the tilted ribbon below its banks, so a stream crossing
+      // rolling ground reads as water in a gully, not water lying on top.
+      level -= Math.min(4, slope * 9);
+    }
     out.strength = s;
     out.width = w;
-    out.level = baseH - 1.6;
+    out.level = level;
     return s;
   }
 
@@ -1025,7 +1064,11 @@ export class WorldGen {
       if (rv > 0.002) {
         const depth = 0.9 + 5.5 * rv;
         const bed = TMPR.level - depth;
-        const k = smoothstep(0.0, 0.85, rv);
+        // Reaching full cut by mid-band (0.6, not 0.85) is what actually
+        // sinks the channel: at the old curve most of the band was carved a
+        // fifth of the way to the bed, so the water sat on the land instead
+        // of in it.
+        const k = smoothstep(0.0, 0.6, rv);
         h = lerp(h, Math.min(h, bed), k);
         riverStrength = rv;
         if (h < TMPR.level && rv > 0.05) waterLevel = Math.max(waterLevel, TMPR.level);

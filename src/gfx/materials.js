@@ -93,9 +93,15 @@ export function makeTerrainMaterial() {
     vertexBody: `vAux = aux;`,
     fragmentPars: /* glsl */ `
       uniform float uWetness;
+      uniform float uRain;
+      uniform float uTime;
       uniform float uSnowAmount;
       uniform float uClimateTemp;
       varying vec4 vAux;
+      // Puddle mask, written by the colour stage and read by the emissive
+      // stage - the sky a puddle reflects must not be multiplied by the
+      // ground's own lighting, or it goes black in shadow.
+      float gPuddle = 0.0;
 
       // Value noise on floats only. The CPU's hash3f cannot be ported here as
       // it stands: its constants exceed INT_MAX, and an out-of-range integer
@@ -164,6 +170,49 @@ export function makeTerrainMaterial() {
         // Fresh snowfall whitens flat ground.
         float snow = clamp( uSnowAmount * ( 1.0 - vAux.y * 1.3 ), 0.0, 1.0 );
         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.86, 0.89, 0.94 ), snow * 0.9 );
+
+        // Puddles. Wet weather pools standing water in the hollows of flat
+        // ground: a noise mask whose threshold sinks as the ground soaks, so
+        // a shower leaves a few dark mirrors and a long storm floods the
+        // whole path - then they dry off as uWetness decays. Only near the
+        // camera: past a couple hundred metres a puddle is sub-pixel and the
+        // wet-ground darkening already carries the look.
+        float pd = distance( vWorldPos.xz, cameraPosition.xz );
+        if ( uWetness > 0.12 && vAux.y < 0.05 && snow < 0.5 && pd < 260.0 ) {
+          vec2 wp2 = vWorldPos.xz;
+          // Two octaves of value noise concentrate hard around 0.5 - a
+          // threshold up at 0.7+ almost never fires. These sit inside the
+          // real spread: light wetness picks off the deepest hollows, a
+          // soaked field floods about a third of the flat ground.
+          float pn = cnoise( wp2 * 0.31 ) * 0.55 + cnoise( wp2 * 0.071 ) * 0.45;
+          float th = 0.78 - uWetness * 0.30;
+          float pud = smoothstep( th, th + 0.07, pn )
+            * ( 1.0 - smoothstep( 0.015, 0.05, vAux.y ) )
+            * ( 1.0 - snow ) * ( 1.0 - smoothstep( 180.0, 260.0, pd ) );
+          // The ground under a puddle is drowned dark; what you see is sky,
+          // and that arrives through the emissive stage below.
+          diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * 0.22, pud );
+          gPuddle = pud;
+        }
+      }
+    `,
+    emissiveFragment: /* glsl */ `
+      if ( gPuddle > 0.002 ) {
+        // Falling rain keeps a puddle shivering; still air leaves it a mirror.
+        vec2 wp2 = vWorldPos.xz;
+        float rip = ( cnoise( wp2 * 1.9 + vec2( uTime * 1.4, -uTime * 1.1 ) ) - 0.5 ) * uRain;
+        vec3 pN = normalize( vec3( rip * 0.55, 1.0, rip * 0.45 ) );
+        vec3 pV = normalize( cameraPosition - vWorldPos );
+        // Sky standing in for reflection, the same stops the water uses, plus
+        // a sun glint off the (rain-ruffled) surface.
+        vec3 skyRef = mix( uHorizonColor, uZenithColor, 0.35 );
+        // Weak looked at steeply - you mostly see the drowned ground - and
+        // bright at a grazing angle, like the real thing. A flat 0.35 base
+        // made every puddle read as lying snow.
+        float pFres = 0.16 + 0.74 * pow( 1.0 - clamp( dot( pN, pV ), 0.0, 1.0 ), 2.0 );
+        vec3 pH = normalize( uSunDir + pV );
+        float pSpec = pow( max( dot( pN, pH ), 0.0 ), 180.0 );
+        totalEmissiveRadiance += ( skyRef * pFres + uSunColor * pSpec * 0.9 ) * gPuddle;
       }
     `,
   });
@@ -236,6 +285,7 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uDeep;
   uniform vec3 uShallow;
   uniform float uWindStrength;
+  uniform float uRain;
   varying vec2 vFlow;
   varying float vDepth;
   varying float vCrest;
@@ -265,10 +315,10 @@ const WATER_FRAG = /* glsl */ `
     float fres = pow( 1.0 - clamp( dot( N, V ), 0.0, 1.0 ), 3.0 );
     vec3 col = mix( body, uHorizonColor, 0.10 + fres * 0.60 );
 
-    // Sun sparkle off the facets.
+    // Sun sparkle off the facets - dulled while rain roughens the surface.
     vec3 H = normalize( uSunDir + V );
     float spec = pow( max( dot( N, H ), 0.0 ), 140.0 );
-    col += uSunColor * spec * 1.6 * ( 0.12 + 0.88 * farK );
+    col += uSunColor * spec * 1.6 * ( 0.12 + 0.88 * farK ) * ( 1.0 - uRain * 0.55 );
 
     // Foam: shoreline wash, river churn, and wind-torn whitecaps on crests.
     // Thresholds sit high so foam stays a ribbon at the water's edge and a
@@ -287,6 +337,16 @@ const WATER_FRAG = /* glsl */ `
     // in the same graphic language as the flat facets.
     foam = smoothstep( 0.34, 0.48, foam ) * farK;
     col = mix( col, vec3( 0.97, 0.99, 1.0 ), clamp( foam, 0.0, 0.9 ) );
+
+    // Rain pocks the surface: a boiling stipple of drop rings, dense in a
+    // downpour, sparse flecks in drizzle. Same distance cutoff as the foam -
+    // past that it would alias into crawling white noise.
+    if ( uRain > 0.02 && farK > 0.01 ) {
+      float rp = texture2D( tDetail, p * 0.21 + vec2( uTime * 0.11, uTime * 0.087 ) ).g;
+      float rp2 = texture2D( tDetail, p * 0.43 - vec2( uTime * 0.13, -uTime * 0.09 ) ).r;
+      float pock = smoothstep( 0.90 - uRain * 0.22, 0.97, rp * 0.6 + rp2 * 0.4 );
+      col = mix( col, vec3( 0.85, 0.90, 0.94 ), pock * uRain * 0.8 * farK );
+    }
 
     float alpha = mix( 0.55, 0.93, clamp( vDepth / 1.6, 0.0, 1.0 ) );
     alpha = clamp( alpha + fres * 0.25 + foam * 0.6, 0.0, 1.0 );

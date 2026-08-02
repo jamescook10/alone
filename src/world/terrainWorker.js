@@ -342,7 +342,10 @@ function build(req) {
 
   // --- inland water surface ----------------------------------------------
   if (wantWater) {
-    const water = buildWater(x0, z0, size, res, step, gw, gh, gwater, griver);
+    // Far tiers only mesh water that stands ABOVE the sea: the horizon plate
+    // already plays the sea out there, and doubling it up would buy nothing
+    // but moire and overdraw.
+    const water = buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, lod >= 5);
     if (water) {
       payload.water = water;
       transfer.push(water.positions.buffer, water.flow.buffer, water.depth.buffer, water.indices.buffer);
@@ -541,13 +544,14 @@ function hashNoise(x, y) {
 
 /* -------------------------------------------------------------- water mesh */
 
-function buildWater(x0, z0, size, res, step, gw, gh, gwater, griver) {
+function buildWater(x0, z0, size, res, step, gw, gh, gwater, griver, inlandOnly = false) {
   // Water is emitted per cell wherever the surface sits above the ground.
   const wet = new Uint8Array((res + 1) * (res + 1));
   let any = false;
   for (let j = 0; j <= res; j++) {
     for (let i = 0; i <= res; i++) {
       const gi = (j + 1) * gw + (i + 1);
+      if (inlandOnly && gwater[gi] < SEA_LEVEL + 0.5) continue;
       if (gwater[gi] > -9000 && gh[gi] < gwater[gi] + 0.35) {
         wet[j * (res + 1) + i] = 1;
         any = true;
