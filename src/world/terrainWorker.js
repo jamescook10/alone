@@ -26,12 +26,151 @@ self.onmessage = (e) => {
       self.postMessage({ type: 'error', id: msg.id, message: String(err && err.stack || err) });
     }
   }
+  if (msg.type === 'horizon') {
+    try {
+      const result = buildHorizon(msg);
+      self.postMessage({ type: 'horizon', ...result.payload }, result.transfer);
+    } catch (err) {
+      self.postMessage({ type: 'error', id: 'horizon', message: String(err && err.stack || err) });
+    }
+  }
 };
+
+/* ----------------------------------------------------------------- horizon */
+
+/**
+ * The landscape beyond the streamed quadtree, as a single silhouette ring.
+ *
+ * A polar annulus of quickSample()d heights: no rivers, no settlements, no
+ * scatter - at fifteen kilometres a mountain range is a shape in the haze and
+ * that is all it needs to be. One draw call, a few thousand triangles, and it
+ * shares the terrain material so the atmosphere can never split at the seam.
+ */
+function buildHorizon(req) {
+  const { cx, cz, rIn, rOut, azi, rings } = req;
+  const nVerts = azi * rings;
+  const positions = new Float32Array(nVerts * 3);
+  const normals = new Float32Array(nVerts * 3);
+  const colors = new Float32Array(nVerts * 3);
+  const aux = new Float32Array(nVerts * 4);
+  const s = {};
+
+  // Log-spaced rings: fine where the silhouette meets the real terrain,
+  // coarse out where a whole fell is a couple of pixels.
+  const radii = new Float64Array(rings);
+  for (let k = 0; k < rings; k++) {
+    radii[k] = rIn * Math.pow(rOut / rIn, k / (rings - 1));
+  }
+
+  const heights = new Float32Array(nVerts);
+  const temps = new Float32Array(nVerts);
+  const moists = new Float32Array(nVerts);
+  const biomes = new Uint8Array(nVerts);
+  for (let k = 0; k < rings; k++) {
+    const r = radii[k];
+    for (let i = 0; i < azi; i++) {
+      const a = (i / azi) * Math.PI * 2;
+      wg.quickSample(cx + Math.cos(a) * r, cz + Math.sin(a) * r, s);
+      const v = k * azi + i;
+      heights[v] = s.height;
+      temps[v] = s.temperature;
+      moists[v] = s.moisture;
+      biomes[v] = s.biome;
+    }
+  }
+
+  for (let k = 0; k < rings; k++) {
+    const r = radii[k];
+    const rd = radii[Math.min(k + 1, rings - 1)] - radii[Math.max(k - 1, 0)];
+    for (let i = 0; i < azi; i++) {
+      const v = k * azi + i;
+      const a = (i / azi) * Math.PI * 2;
+      const h = heights[v];
+      // Anything under the sea ducks below the horizon plate, and the wall
+      // this drops at the coastline reads as the coast from this far away.
+      const sea = h < SEA_LEVEL + 0.5;
+      // Earth curvature: r²/2R sinks far ranges below the horizon the way
+      // they really do - and, at the inner edge, it guarantees the real
+      // streamed terrain wins wherever the two briefly overlap.
+      const drop = (r * r) / (2 * 6371000);
+      positions[v * 3] = Math.cos(a) * r;
+      positions[v * 3 + 1] = (sea ? -8 : h) - drop;
+      positions[v * 3 + 2] = Math.sin(a) * r;
+
+      // Slope from the polar neighbours, for the rock band and the snow line.
+      const iN = k * azi + (i + 1) % azi;
+      const iP = k * azi + (i - 1 + azi) % azi;
+      const kN = Math.min(k + 1, rings - 1) * azi + i;
+      const kP = Math.max(k - 1, 0) * azi + i;
+      const da = (Math.PI * 2 / azi) * r * 2;
+      const gx = (heights[iN] - heights[iP]) / da;
+      const gz = (heights[kN] - heights[kP]) / Math.max(rd, 1);
+      const ny = 1 / Math.sqrt(1 + gx * gx + gz * gz);
+      const slope = 1 - ny;
+      normals[v * 3] = 0;
+      normals[v * 3 + 1] = 1;
+      normals[v * 3 + 2] = 0;
+
+      const info = BIOME_INFO[biomes[v]];
+      let cr, cg, cb;
+      if (sea) {
+        // Hidden under the sea plate; dark silt in case a sliver ever shows.
+        cr = 0.01; cg = 0.025; cb = 0.035;
+      } else {
+        cr = (info.col[0] + info.col2[0]) * 0.5;
+        cg = (info.col[1] + info.col2[1]) * 0.5;
+        cb = (info.col[2] + info.col2[2]) * 0.5;
+        // The same painted canopy the streamed chunks wear, on the same
+        // channel, so a forested range does not change colour at the seam.
+        const canopy = canopyCover(
+          cx + Math.cos(a) * r, cz + Math.sin(a) * r, info, moists[v]);
+        aux[v * 4 + 2] = canopy;
+        const rockCol = info.rock || ROCK_COL;
+        const rock = smoothstep(0.46, 0.60, slope);
+        cr = lerp(cr, rockCol[0], rock);
+        cg = lerp(cg, rockCol[1], rock);
+        cb = lerp(cb, rockCol[2], rock);
+        // Same snow rule as the near ground, so the snow line carries on
+        // across the seam instead of stopping at fifteen kilometres.
+        const snow = smoothstep(4.0, -3.0, temps[v])
+          * (1 - smoothstep(0.35, 0.75, slope)) * (1 - canopy * 0.6);
+        cr = lerp(cr, SNOW_COL[0], snow);
+        cg = lerp(cg, SNOW_COL[1], snow);
+        cb = lerp(cb, SNOW_COL[2], snow);
+        aux[v * 4 + 3] = snow;
+      }
+      colors[v * 3] = cr;
+      colors[v * 3 + 1] = cg;
+      colors[v * 3 + 2] = cb;
+      aux[v * 4 + 1] = slope;
+    }
+  }
+
+  const indices = new Uint32Array((rings - 1) * azi * 6);
+  let t = 0;
+  for (let k = 0; k < rings - 1; k++) {
+    for (let i = 0; i < azi; i++) {
+      const a = k * azi + i;
+      const c = k * azi + (i + 1) % azi;
+      const d = (k + 1) * azi + (i + 1) % azi;
+      const b = (k + 1) * azi + i;
+      indices[t++] = a; indices[t++] = c; indices[t++] = d;
+      indices[t++] = a; indices[t++] = d; indices[t++] = b;
+    }
+  }
+
+  return {
+    payload: { cx, cz, positions, normals, colors, aux, indices },
+    transfer: [positions.buffer, normals.buffer, colors.buffer, aux.buffer, indices.buffer],
+  };
+}
 
 /* ------------------------------------------------------------------- build */
 
 function build(req) {
   const { x0, z0, size, res, lod, wantWater, wantScatter } = req;
+  const keep = req.keep !== undefined ? req.keep : 1;
+  const wantGround = req.wantGround !== false;
   const step = size / res;
   const gw = res + 3; // one border ring on each side for seamless normals
   const nVerts = (res + 1) * (res + 1);
@@ -127,8 +266,11 @@ function build(req) {
       const wet = wl > -9999 ? saturate((wl - h + 1.2) / 2.4) : saturate(1 - Math.abs(h - SEA_LEVEL) / 1.8) * 0.5;
       aux[vi * 4] = wet;
       aux[vi * 4 + 1] = slope;
-      aux[vi * 4 + 2] = MATW[0];
-      aux[vi * 4 + 3] = MATW[1];
+      // z carries the painted canopy cover. The old sand/snow splat weights
+      // that used to live in z and w died with the texture set; nothing has
+      // read them since, and the canopy needs somewhere to ride.
+      aux[vi * 4 + 2] = canopyCover(wx, wz, BIOME_INFO[gbiome[gi]], gmoist[gi]);
+      aux[vi * 4 + 3] = MATW[0];
     }
   }
 
@@ -209,7 +351,7 @@ function build(req) {
 
   // --- things that live on the ground -------------------------------------
   if (wantScatter) {
-    const sc = scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver, grail, gsite, gfarm);
+    const sc = scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver, grail, gsite, gfarm, keep, wantGround);
     payload.scatter = sc;
     for (const key of ['plants', 'rocks', 'grass']) {
       if (sc[key]) transfer.push(sc[key].buffer);
@@ -221,13 +363,41 @@ function build(req) {
 
 /* ------------------------------------------------------------ ground colour */
 
-const MATW = [0, 0]; // sand, snow weights for the texture splat
+// Snow weight, handed back out for the aux channel the shader reads. The sand
+// weight that used to sit beside it went with the texture splat.
+const MATW = [0];
 // One reused argument bag: this runs once per terrain vertex and a fourteen
 // argument call signature was already unreadable before the railways arrived.
 const GC = {
   x: 0, z: 0, h: 0, biome: 0, temp: 0, moist: 0, slope: 0, water: 0,
   river: 0, road: 0, surface: 0, town: 0, rail: 0, farm: 0, dune: 0,
 };
+
+/**
+ * How much canopy covers this point, 0..1 - the painted stand-in for trees too
+ * far away to instance. Baked per vertex on every chunk and on the horizon
+ * ring, and blended in by camera distance in the fragment shader.
+ *
+ * This is the SMOOTH field only. The mottle that breaks a wood into stands and
+ * clearings deliberately does not live here: its wavelengths are 222 m and
+ * 111 m, and the vertex spacing that samples it runs from 4 m on a near chunk
+ * to 43 m at lod 3 and 368 m on the horizon ring, so baking it averages it
+ * away to a flat tone exactly where it is needed. Measured, the baked version
+ * delivered a mean of -21/255 green with a spatial deviation of only 5, which
+ * does not read as forest - it just flattens the distance, cutting frame
+ * contrast from 15.7 to 12.2. The structure is generated per *pixel* in the
+ * fragment shader instead, where vertex spacing cannot touch it.
+ */
+function canopyCover(x, z, info, moist) {
+  const d = density(info, moist);
+  if (d <= 0.05) return 0;
+  return Math.min(0.72, d * 0.55);
+}
+
+/** The stand-and-clearing mottle, mirrored in the terrain fragment shader. */
+function canopyMottle(x, z) {
+  return hashNoise(x * 0.0045, z * 0.0045) * 0.7 + hashNoise(x * 0.009, z * 0.009) * 0.3;
+}
 
 // Flat-look overlays, authored in sRGB pastels and converted once. Biomes may
 // override the rock and the sand - red rock in badlands, black sand under a
@@ -253,13 +423,7 @@ function groundColor(c, out, matw) {
   const { x, z, h, biome, temp, slope } = c;
   const info = BIOME_INFO[biome];
 
-  if (matw) {
-    // The sand splat is for anything that reads as loose grains.
-    matw[0] = (biome === BIOME.DESERT || biome === BIOME.DUNES || biome === BIOME.BEACH ||
-      biome === BIOME.SALT_FLAT || biome === BIOME.BLACK_SAND)
-      ? 1 - smoothstep(0.30, 0.60, slope) : 0;
-    matw[1] = 0;
-  }
+  if (matw) matw[0] = 0;
 
   // Two-tone base quantised to three flat steps: large clean patches of
   // colour instead of continuous mottle - the flat-illustration look.
@@ -276,6 +440,13 @@ function groundColor(c, out, matw) {
     r += k * 0.10; g += k * 0.085; b += k * 0.05;
   }
 
+  // The canopy colour itself is applied in the shader, where it can fade with
+  // camera distance and carry its own structure. Here the mottle is still
+  // wanted, because damping the snow lerp per vertex is what keeps a snowy
+  // taiga stippled dark the way real conifer country looks from the air.
+  const cover = canopyCover(x, z, info, c.moist);
+  const canopy = cover * smoothstep(0.15, 0.6, canopyMottle(x, z) + cover * 0.364);
+
   // Steep ground shows rock, over a narrow band so the edge stays clean.
   const rockCol = info.rock || ROCK_COL;
   const rock = smoothstep(0.46, 0.60, slope);
@@ -290,8 +461,8 @@ function groundColor(c, out, matw) {
   // atmosphere runs for trees, rocks and buildings, so a snowy hillside now
   // carries snowy trees and snowy roofs instead of green ones.
   const snowLine = smoothstep(4.0, -3.0, temp);
-  const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope));
-  if (matw) matw[1] = snow;
+  const snow = snowLine * (1 - smoothstep(0.35, 0.75, slope)) * (1 - canopy * 0.6);
+  if (matw) matw[0] = snow;
   if (snow > 0.01) {
     r = lerp(r, SNOW_COL[0], snow);
     g = lerp(g, SNOW_COL[1], snow);
@@ -304,7 +475,6 @@ function groundColor(c, out, matw) {
     if (d > -1.6) {
       const sandCol = info.sand || SAND_COL;
       const shore = smoothstep(0.25, 0.75, saturate(1 - Math.abs(d) / 2.2));
-      if (matw) matw[0] = Math.max(matw[0], shore);
       r = lerp(r, sandCol[0], shore * 0.8);
       g = lerp(g, sandCol[1], shore * 0.8);
       b = lerp(b, sandCol[2], shore * 0.8);
@@ -466,16 +636,31 @@ const TMPF = [0, 0];
 /* ----------------------------------------------------------------- scatter */
 
 // Plant record layout (floats): x, y, z, species, scale, rotation, ageSeed,
-// health, id-hash.
-export const PLANT_STRIDE = 9;
+// health, id-hash, rank.
+export const PLANT_STRIDE = 10;
 export const ROCK_STRIDE = 8; // x,y,z,scale,rotX,rotY,rotZ,biome
 export const GRASS_STRIDE = 7; // x,y,z,scale,rot,type,biome
+
+// The densest tree and rock biomes, used to reject a lattice cell before it
+// costs a single grid read. Bamboo at 1.5 and scree at 1.4 set these; nothing
+// can pass the admission test above the tree bound or below the rock one, and
+// a 512 m chunk is 16 384 cells, so this is what pays for scattering that far.
+const MAX_TREES = Math.max(...BIOME_INFO.map((b) => b.trees || 0));
+const MAX_ROCKS = Math.max(...BIOME_INFO.map((b) => b.rocks || 0));
+
+/** Trees per lattice cell, before the rank cut. Shared with canopyCover. */
+const density = (info, moist) => info.trees * (0.55 + moist * 0.9);
 
 // Species selection lives in biomes.js as a per-biome mix table, so the oracle,
 // the scatter and the geometry builders can never disagree about what grows
 // where. This module just rolls the dice.
 
-function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver, grail, gsite, gfarm) {
+/**
+ * @param keep fraction of trees to admit, by rank. Coarse chunks take a
+ *   *subset* of what the fine ones take - never a different set. See below.
+ * @param wantGround rocks and grass, which only the near tiers ever show.
+ */
+function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groad, gtown, griver, grail, gsite, gfarm, keep = 1, wantGround = true) {
   const plants = [];
   const rocks = [];
   const grass = [];
@@ -485,6 +670,35 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
     const i = clamp(Math.round(lx / step), 0, res) + 1;
     const j = clamp(Math.round(lz / step), 0, res) + 1;
     return j * gw + i;
+  };
+
+  // The density inputs are read on a fixed 16 m lattice rather than on this
+  // chunk's own grid. lod 0 samples every 4 m and lod 1 every 8 m, both of
+  // which contain every 16 m node exactly, and lod 2's grid *is* 16 m - so the
+  // admission test below is bit-identical at all three tiers. Without this the
+  // tiers disagree within a few metres of any biome or moisture boundary, and
+  // a thin band of trees blinks on and off every time a chunk splits.
+  const qs = Math.max(1, Math.round(16 / step));
+  const coarseAt = (lx, lz) => {
+    const i = clamp(Math.round(lx / step / qs) * qs, 0, res) + 1;
+    const j = clamp(Math.round(lz / step / qs) * qs, 0, res) + 1;
+    return j * gw + i;
+  };
+
+  // Height read off the drawn surface rather than the nearest grid node.
+  // Rounding to the node seats a tree up to 11 m from where the mesh actually
+  // is, which at lod 2 sinks trees to their crowns in rough country.
+  const heightAt = (lx, lz) => {
+    const fx = clamp(lx / step, 0, res);
+    const fz = clamp(lz / step, 0, res);
+    const i = Math.min(Math.floor(fx), res - 1);
+    const j = Math.min(Math.floor(fz), res - 1);
+    const tx = fx - i;
+    const tz = fz - j;
+    const k = (j + 1) * gw + (i + 1);
+    const a = gh[k] + (gh[k + 1] - gh[k]) * tx;
+    const b = gh[k + gw] + (gh[k + gw + 1] - gh[k + gw]) * tx;
+    return a + (b - a) * tz;
   };
 
   // Plants and rocks: a jittered lattice keeps placement deterministic and
@@ -503,23 +717,40 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
       const lx = px - x0;
       const lz = pz - z0;
       if (lx < 0 || lz < 0 || lx >= size || lz >= size) continue;
-      const gi = gridAt(lx, lz);
-      const h = gh[gi];
-      const wl = gwater[gi];
-      const biome = gbiome[gi];
-      const info = BIOME_INFO[biome];
+      // Reject on the hash alone before touching the grid: about seven cells
+      // in eight fail here even in forest, and they used to pay for six array
+      // reads and a BIOME_INFO lookup first.
       const r1 = ((h1 >>> 20) & 4095) / 4095;
+      if (r1 >= MAX_TREES * 1.45 * cell * cell * 0.0082 * keep
+        && (!wantGround || r1 <= 1 - MAX_ROCKS * cell * cell * 0.0032)) continue;
+
+      const ci2 = coarseAt(lx, lz);
+      const gi = gridAt(lx, lz);
+      const h = heightAt(lx, lz);
+      const wl = gwater[ci2];
+      const biome = gbiome[ci2];
+      const info = BIOME_INFO[biome];
 
       const depth = wl > -9000 ? wl - h : -1;
       const underwater = depth > 0.15;
       // Kelp and reef weed are the only things that grow with their feet in
       // the sea, and only where light still reaches the bottom.
       const marine = underwater && depth < 22 && (biome === BIOME.KELP || biome === BIOME.REEF);
-      const built = gtown[gi] > 0.25 || groad[gi] > 0.12 || grail[gi] > 0.10 || gsite[gi] > 0.35;
+      const built = gtown[ci2] > 0.25 || groad[ci2] > 0.12 || grail[ci2] > 0.10 || gsite[ci2] > 0.35;
 
       // trees
-      const density = info.trees * (0.55 + gmoist[gi] * 0.9);
-      if ((!underwater || marine) && !built && r1 < density * cell * cell * 0.0082) {
+      //
+      // `keep` thins by RANK, not by changing the lattice. The cell size stays
+      // 4 m at every tier: the admission threshold contains cell*cell, so a
+      // bigger cell would preserve density rather than thin it, and the hash is
+      // keyed on the cell index, so a different cell size is a different point
+      // set entirely - every tree in the chunk would teleport on a LOD change.
+      // Thinning on rank instead makes a coarse chunk's trees a strict SUBSET
+      // of the fine chunk's, at identical position, species, scale and
+      // rotation, so splitting can only add trees and merging only remove ones
+      // the finer tier had extra.
+      const thr = density(info, gmoist[ci2]) * cell * cell * 0.0082;
+      if ((!underwater || marine) && !built && r1 < thr * keep) {
         const r2 = hash3f(ci, cj, 0x77aa);
         const sp = speciesFor(biome, r2);
         const r3 = hash3f(ci, cj, 0x1188);
@@ -531,9 +762,13 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
           r4 * 6.2831853,
           hash3f(ci, cj, 0x4321), // age seed
           1.0, // health
-          hash3i(ci, cj, 0xaced) >>> 0
+          hash3i(ci, cj, 0xaced) >>> 0,
+          // Rank in (0,1]: where this tree sits in the admission order. It is
+          // a property of the tree, not of the tier that drew it, which is
+          // what lets the near and far tiers agree on which trees exist.
+          Math.min(1, r1 / thr)
         );
-      } else if (!built && !underwater && r1 > 1 - info.rocks * cell * cell * 0.0032) {
+      } else if (wantGround && !built && !underwater && r1 > 1 - info.rocks * cell * cell * 0.0032) {
         const r2 = hash3f(ci, cj, 0x2299);
         const r3 = hash3f(ci, cj, 0x3377);
         rocks.push(
@@ -549,7 +784,7 @@ function scatter(x0, z0, size, gw, step, gh, gbiome, gwater, gtemp, gmoist, groa
   }
 
   // Grass tufts and flowers: much denser, only on the nearest chunks.
-  if (size <= 160) {
+  if (wantGround && size <= 160) {
     const gcell = 1.45;
     const gn = Math.ceil(size / gcell);
     const gi0 = Math.floor(x0 / gcell);

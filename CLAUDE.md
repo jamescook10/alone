@@ -36,11 +36,19 @@ screen for real people. Always, before pushing:
    and every landmark kind it can find, and flies the aeroplane. The smoke test
    only ever sees the spot you wake up in, and almost nothing in this world is
    there. Most of what has broken since the world got big broke somewhere else.
-4. Look at a screenshot. This is a game; a change that compiles and throws no
-   errors can still be visibly wrong. Several bugs here rendered perfectly
-   cleanly and looked terrible. `npm run postcards -- shots/` takes one of each
-   biome in a single browser session.
-5. If you touched the sky, `npm run skyshots -- shots/` instead. It stands you
+4. `npm run flight` — pins the player at 2 m, 280 m and 600 m and checks the
+   near ring hands over to silhouettes, that no instance pool count goes
+   negative, and that the painted canopy reaches the terrain. Nearly every
+   streaming bug so far has been invisible at head height and obvious from
+   the air; smoke and tour both measure standing up.
+5. Look at a screenshot **only when pushing straight to `main`**. This is a
+   game; a change that compiles and throws no errors can still be visibly
+   wrong. Several bugs here rendered perfectly cleanly and looked terrible.
+   `npm run postcards -- shots/` takes one of each biome in a single browser
+   session. When working on a branch the owner will review, skip the
+   screenshot pass - it is quicker for them to check out the branch and boot
+   the game for real than for headless SwiftShader to render it.
+6. If you touched the sky, `npm run skyshots -- shots/` instead. It stands you
    on an open hilltop with no town in sight and takes the Milky Way, the moon's
    phases, an aurora, a meteor, dawn, dusk, cirrus, a rainbow and a lightning
    stroke - forcing each, because most of them happen on a few nights a year
@@ -133,6 +141,24 @@ triangles. Count before you build.
   does again: a bone authored as `upperleg.l` arrives as `upperlegl`, and a
   lookup table keyed the other way misses every limb, changes nothing, and
   reports no error.
+- **`Pool.free(i)` removes an instance; there is no argument-less form.**
+  A helper added as `free()` meaning "how many slots are left" resolved to the
+  same method, so every capacity check quietly deleted one instance from each
+  pool it looked at. Counts drifted negative, forests thinned as you flew, and
+  nothing threw. The accessor is `headroom()` for that reason.
+- **Freeing a chunk's instances in allocation order double-frees them.**
+  `Pool.free` swap-removes: it moves the pool's last instance into the freed
+  slot and tells its owner. When that owner is the chunk being torn down, the
+  slot list being iterated is rewritten under the loop to a slot already
+  released. Free highest-slot-first, grouped by pool.
+- **Tier and LOD decisions must use three-dimensional distance.** Priced on
+  `dx`/`dz` alone, the ground under an aeroplane is nought metres away and
+  keeps its full-detail trees, so flying paid the near-ring bill for scenery
+  two hundred metres below. `npm run flight` exists to catch exactly this.
+- **Painted detail keyed on chunk LOD draws a square on the ground.** The
+  canopy that stands in for distant trees is baked on every chunk and faded in
+  by *camera distance* in the shader; keying it to `lod >= 2` made every LOD
+  boundary a hard-edged square of darker green in the middle distance.
 - **Two transparent surfaces at nearly the same height produce moire.** The
   horizon plate sits at −2.2 m, writes depth and draws before the water.
 - **Physically scaled light needs physically scaled albedo.** Ground colours in

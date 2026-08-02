@@ -62,6 +62,17 @@ export function blobTexture(softness = 0.55, seed = 3) {
 
 /* ---------------------------------------------------------- terrain */
 
+// The colour a forest canopy takes seen from above: near-black blue-green in
+// cold conifer country, a warmer green where broadleaf grows. Authored in
+// sRGB and converted once, like every other reflectance in the game.
+// Deliberately much darker than the ground they sit on. Measured, the first
+// version differed from forest ground by only 16-19 sRGB levels, which reads
+// as a faint stain rather than as woodland; a real canopy seen from the air is
+// roughly half the luminance of open pasture.
+const CANOPY_COLD = new THREE.Color().setRGB(0.13, 0.22, 0.17, THREE.SRGBColorSpace);
+const CANOPY_WARM = new THREE.Color().setRGB(0.19, 0.32, 0.17, THREE.SRGBColorSpace);
+const v3 = (c) => `vec3( ${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)} )`;
+
 export function makeTerrainMaterial() {
   const mat = new THREE.MeshLambertMaterial({
     vertexColors: true,
@@ -83,13 +94,73 @@ export function makeTerrainMaterial() {
     fragmentPars: /* glsl */ `
       uniform float uWetness;
       uniform float uSnowAmount;
+      uniform float uClimateTemp;
       varying vec4 vAux;
+
+      // Value noise on floats only. The CPU's hash3f cannot be ported here as
+      // it stands: its constants exceed INT_MAX, and an out-of-range integer
+      // literal is an error in GLSL ES 3.00. This never has to agree with the
+      // CPU - nothing else reads it - so a float hash is the safe choice.
+      float chash( vec2 p ) {
+        return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+      }
+      float cnoise( vec2 p ) {
+        vec2 i = floor( p );
+        vec2 f = fract( p );
+        vec2 u = f * f * ( 3.0 - 2.0 * f );
+        return mix(
+          mix( chash( i ), chash( i + vec2( 1.0, 0.0 ) ), u.x ),
+          mix( chash( i + vec2( 0.0, 1.0 ) ), chash( i + vec2( 1.0, 1.0 ) ), u.x ), u.y );
+      }
     `,
     colorFragment: /* glsl */ `
       {
         // Rain darkens the ground; puddled shorelines (vAux.x) stay darker.
         float wet = clamp( vAux.x + uWetness * ( 1.0 - vAux.y * 1.6 ), 0.0, 1.0 );
         diffuseColor.rgb *= mix( 1.0, 0.72, wet * 0.8 );
+
+        // Painted forest canopy, faded in by camera distance.
+        //
+        // Instanced trees stop about 2.5 km out, so past that a wooded hill has
+        // to be painted. vAux.z carries the smooth cover fraction; every scrap
+        // of STRUCTURE is generated here, per pixel.
+        //
+        // That split is the whole point. The first version baked the mottle
+        // into the vertices, and the vertex spacing that samples it runs from
+        // 4 m near to 43 m at lod 3 and 368 m on the horizon ring - so it
+        // averaged away to a flat wash exactly where it was needed. Measured,
+        // it delivered a mean of -21/255 green with a spatial deviation of 5,
+        // which does not read as forest: a lerp toward one colour pulls the
+        // clearings down as hard as it darkens the wood, and it actually CUT
+        // frame contrast from 15.7 to 12.2. A threshold mask cannot do that -
+        // it leaves the clearings alone and only darkens where trees stand.
+        float cd = distance( vWorldPos, cameraPosition );
+        // Starts well inside the instanced ring on purpose. Where real trees are
+          // drawn this reads as the shade they cast on the ground; where they
+          // have thinned out it takes over as the trees themselves. Beginning it
+          // at the far ring instead left a visibly paler band around the player.
+          float canopy = vAux.z * smoothstep( 150.0, 620.0, cd );
+        if ( canopy > 0.002 ) {
+          vec2 wp = vWorldPos.xz;
+          // Stands, then clumps within a stand, then individual crowns. The
+          // finest octave fades out past 3 km, where it would alias.
+          float n = cnoise( wp * 0.0045 ) * 0.55
+                  + cnoise( wp * 0.019 ) * 0.28
+                  + cnoise( wp * 0.075 ) * 0.17 * ( 1.0 - smoothstep( 1200.0, 3000.0, cd ) );
+          // A mask, not a wash: below the threshold the ground stays exactly
+          // as it was, so clearings, tracks and rock keep their own colour.
+          float m = smoothstep( 0.52 - canopy * 0.62, 0.92 - canopy * 0.62, n );
+          float ct = uClimateTemp - max( vWorldPos.y, 0.0 ) * 0.0068;
+          vec3 cc = mix( ${v3(CANOPY_COLD)}, ${v3(CANOPY_WARM)}, smoothstep( 3.0, 13.0, ct ) );
+          // Sunlit crowns against shaded gaps. Without this the mask is still
+          // a flat colour, just a lumpy one - and it is the light falling on
+          // one side of a wood that says "trees" at four kilometres.
+          float lit = 0.5 + 0.5 * dot( normalize( vec3(
+            cnoise( wp * 0.019 + 7.3 ) - n, 0.55, cnoise( wp * 0.019 - 3.1 ) - n ) ), uSunDir );
+          cc *= 0.80 + 0.55 * lit;
+          diffuseColor.rgb = mix( diffuseColor.rgb, cc, m * min( 1.0, canopy * 1.55 ) );
+        }
+
         // Fresh snowfall whitens flat ground.
         float snow = clamp( uSnowAmount * ( 1.0 - vAux.y * 1.3 ), 0.0, 1.0 );
         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.86, 0.89, 0.94 ), snow * 0.9 );
@@ -170,8 +241,15 @@ const WATER_FRAG = /* glsl */ `
   varying float vCrest;
 
   void main() {
-    vec3 V = normalize( cameraPosition - vWorldPos );
+    vec3 dv = cameraPosition - vWorldPos;
+    float vdist = length( dv );
+    vec3 V = dv / max( vdist, 1e-4 );
     vec2 p = vWorldPos.xz;
+    // Foam flecks and facet glints are sub-pixel past a few hundred metres,
+    // where they alias into white noise crawling over the whole sea - worst
+    // from the aeroplane. Distance keeps the body colour and the fresnel and
+    // lets the glitter live only where it can resolve.
+    float farK = 1.0 - smoothstep( 350.0, 1100.0, vdist );
 
     // Faceted normal straight from the displaced surface: every triangle of
     // the swell is one flat mirror shard, which is what makes Gerstner waves
@@ -190,7 +268,7 @@ const WATER_FRAG = /* glsl */ `
     // Sun sparkle off the facets.
     vec3 H = normalize( uSunDir + V );
     float spec = pow( max( dot( N, H ), 0.0 ), 140.0 );
-    col += uSunColor * spec * 1.6;
+    col += uSunColor * spec * 1.6 * ( 0.12 + 0.88 * farK );
 
     // Foam: shoreline wash, river churn, and wind-torn whitecaps on crests.
     // Thresholds sit high so foam stays a ribbon at the water's edge and a
@@ -207,7 +285,7 @@ const WATER_FRAG = /* glsl */ `
       + whitecap * smoothstep( 0.55, 0.80, fn2 );
     // Hard-edged foam patches, not a soft wash: quantising the mask keeps it
     // in the same graphic language as the flat facets.
-    foam = smoothstep( 0.34, 0.48, foam );
+    foam = smoothstep( 0.34, 0.48, foam ) * farK;
     col = mix( col, vec3( 0.97, 0.99, 1.0 ), clamp( foam, 0.0, 0.9 ) );
 
     float alpha = mix( 0.55, 0.93, clamp( vDepth / 1.6, 0.0, 1.0 ) );

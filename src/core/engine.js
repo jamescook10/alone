@@ -62,7 +62,10 @@ export class Engine {
     this.scene = new THREE.Scene();
     this.scene.fog = null; // we do our own aerial perspective
 
-    this.baseFar = 30000;
+    // Far enough to hold the horizon silhouette ring. Perspective depth
+    // precision is set almost entirely by the near plane, so doubling this
+    // costs nothing there.
+    this.baseFar = 60000;
     this.camera = new THREE.PerspectiveCamera(68, 1, 0.3, this.baseFar);
     this.camera.rotation.order = 'YXZ';
 

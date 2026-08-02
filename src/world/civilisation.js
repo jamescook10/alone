@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { makeSolidMaterial } from '../gfx/materials.js';
+import { atmo } from '../gfx/atmosphere.js';
 import { Rng, hash3i, hash3f, clamp, lerp, saturate, smoothstep } from '../core/noise.js';
 import { SETTLEMENT, SETTLEMENT_INFO, SURFACE, SITE, SITE_INFO, BIOME } from './worldgen.js';
 import { Collider } from '../sim/physics.js';
@@ -165,6 +166,10 @@ class Build {
   _makeInstanced(list, mat, isGlass) {
     if (!list.length) return null;
     const geo = new THREE.BoxGeometry(1, 1, 1);
+    // The moment this settlement streamed in, for the dither fade: a whole
+    // town used to snap into existence in one frame at the stream-in radius.
+    geo.setAttribute('aSpawn',
+      new THREE.InstancedBufferAttribute(new Float32Array(list.length).fill(atmo.uTime.value), 1));
     const mesh = new THREE.InstancedMesh(geo, mat, list.length);
     mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(list.length * 3), 3);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -2286,6 +2291,8 @@ export class Civilisation {
       key: 'glass', flat: false, roughness: 0.06, metalness: 0.0,
       transparent: true, opacity: 0.30, vertexColors: false, color: 0x9fc2cc,
     });
+    this._patchSpawnFade(this.pieceMat);
+    this._patchSpawnFade(this.glassMat);
     this.bodyMat = makeSolidMaterial({ key: 'body', vertexColors: false, roughness: 0.34, metalness: 0.55 });
     this.metalMat = makeSolidMaterial({ key: 'metalv', vertexColors: false, color: 0xb8b3a4, roughness: 0.5, metalness: 0.7 });
     this.tyreMat = makeSolidMaterial({ key: 'tyre', vertexColors: false, color: 0x151517, roughness: 0.95 });
@@ -2304,6 +2311,44 @@ export class Civilisation {
       this.lampLights.push(l);
     }
     this._scratch = [];
+  }
+
+  /**
+   * A screen-door fade for streamed-in pieces: each instance carries the
+   * uTime it appeared and dissolves in over a second, so a settlement
+   * crossing the stream-in radius no longer snaps into existence whole.
+   * Dither, not alpha - the pieces stay in the opaque queue with early-Z
+   * intact, and the discard branch is dead once the fade is over. Chained
+   * onto onBeforeCompile because injectAtmosphere can only run once.
+   */
+  _patchSpawnFade(mat) {
+    const prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = (shader, renderer) => {
+      prev(shader, renderer);
+      shader.vertexShader = shader.vertexShader.replace(
+        'varying vec3 vWorldPos;',
+        'varying vec3 vWorldPos;\nattribute float aSpawn;\nvarying float vSpawn;'
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <project_vertex>',
+        'vSpawn = aSpawn;\n#include <project_vertex>'
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'varying vec3 vWorldPos;',
+        'varying vec3 vWorldPos;\nuniform float uTime;\nvarying float vSpawn;'
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `{
+          float fs = ( uTime - vSpawn ) * 0.85;
+          if ( fs < 1.0 ) {
+            float d = fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) );
+            if ( d >= fs ) discard;
+          }
+        }
+        #include <color_fragment>`
+      );
+    };
   }
 
   spawnVehicle(x, z, yaw, kind, owner, opts) {
