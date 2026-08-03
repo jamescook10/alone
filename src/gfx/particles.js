@@ -203,6 +203,27 @@ export class Particles {
     }
   }
 
+  /**
+   * The mist standing over falling water. Slower and wetter than steam: it
+   * rises off the plunge pool, drifts on the wind and falls back out again,
+   * which is what makes a fall visible from further away than you can hear it.
+   */
+  spray(x, y, z, scale = 1, n = 3) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.283;
+      const r = Math.random() * 2.2 * scale;
+      this._p(this.soft, x + Math.cos(a) * r, y + Math.random() * 1.4 * scale, z + Math.sin(a) * r, {
+        vx: Math.cos(a) * 0.7 * scale, vz: Math.sin(a) * 0.7 * scale,
+        vy: 1.5 + Math.random() * 2.1 * scale,
+        r: 0.95, g: 0.98, b: 1.0,
+        size: (0.5 + Math.random() * 0.7) * scale,
+        grow: 1.5 * scale,
+        alpha: 0.26, life: 1.6 + Math.random() * 2.0,
+        drag: 0.85, grav: -1.6, wind: 1.5,
+      });
+    }
+  }
+
   sparks(x, y, z, n = 12, power = 1) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.283;

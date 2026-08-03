@@ -141,6 +141,31 @@ export class Player {
     this.swimming = this.submersion > 0.72;
     this.underwater = eyeUnder;
 
+    // Breaking the surface, in either direction. The impact scales with how
+    // fast you were going, so stepping into a brook is a ripple and falling
+    // into a lake off a bank is not.
+    const wasIn = this._wasInWater || false;
+    const nowIn = this.submersion > 0.12;
+    if (nowIn !== wasIn && water > -Infinity) {
+      const force = Math.min(3, 0.4 + Math.abs(vel.y) * 0.22 + this.speed * 0.10);
+      this.world.particles.splash(pos.x, water, pos.z, force, Math.round(6 + force * 7));
+      if (this.world.audio) {
+        this.world.audio.burst({
+          pos: [pos.x, water, pos.z], refDist: 1.5, maxDist: 40,
+          freq: 420 + Math.random() * 380, q: 0.8,
+          gain: 0.10 + force * 0.10, attack: 0.004, release: 0.22 + force * 0.10,
+          sweep: -220, reverb: 0.3,
+        });
+      }
+    }
+    this._wasInWater = nowIn;
+
+    // Wading pushes water aside: a steady trickle of droplets while you move
+    // through the shallows.
+    if (nowIn && !this.swimming && this.speed > 1.0 && Math.random() < dt * this.speed * 1.4) {
+      this.world.particles.splash(pos.x, water, pos.z, 0.30, 3);
+    }
+
     /* --- intent -------------------------------------------------------- */
     const ax = inp ? inp.axes(this._axes) : this._axes;
     let wantSprint = inp && (inp.down('ShiftLeft') || inp.down('ShiftRight'));

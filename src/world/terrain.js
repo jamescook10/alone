@@ -109,6 +109,7 @@ export class Terrain {
       wg.setAttribute('position', new THREE.BufferAttribute(data.water.positions, 3));
       wg.setAttribute('flow', new THREE.BufferAttribute(data.water.flow, 2));
       wg.setAttribute('depth', new THREE.BufferAttribute(data.water.depth, 1));
+      wg.setAttribute('fall', new THREE.BufferAttribute(data.water.fall, 1));
       wg.setIndex(new THREE.BufferAttribute(data.water.indices, 1));
       wg.computeBoundingSphere();
       const wm = new THREE.Mesh(wg, this.waterMaterial);
@@ -314,9 +315,12 @@ export class Terrain {
         size: node.size,
         res: node.lod <= 2 ? RES_NEAR : RES_FAR,
         lod: node.lod,
-        // Beyond a couple of kilometres the flat horizon plate takes over,
-        // so there is no point meshing water out there.
-        wantWater: node.lod <= 4,
+        // Every tier meshes water now. The flat horizon plate only stands in
+        // for the SEA, so the worker still skips sea cells on the far tiers -
+        // but an inland lake at 80 m is nowhere near the plate at -2.2 m, and
+        // skipping those left every distant lake a dry bowl with fish
+        // swimming in the air above it.
+        wantWater: true,
         // Trees reach lod 3, about 2.8 km; rocks and grass only ever show on
         // the near tiers. Each coarser tier takes a rank-thinned SUBSET of
         // exactly the same trees, so a split adds trees rather than replacing

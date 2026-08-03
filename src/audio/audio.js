@@ -328,6 +328,26 @@ export class Audio {
     this.rainGain.connect(this.dry);
     this.reverbSendFrom(this.rainGain, 0.2);
 
+    /* waterfalls -------------------------------------------------------- */
+    // Its own bus, not a louder brook: a fall is broadband and bottom-heavy,
+    // and it has to be able to sit under the babble of the river it is part
+    // of rather than replace it.
+    this.fallGain = ctx.createGain();
+    this.fallGain.gain.value = 0;
+    this.fallFilter = ctx.createBiquadFilter();
+    this.fallFilter.type = 'lowpass';
+    this.fallFilter.frequency.value = 1100;
+    this.fallFilter.Q.value = 0.5;
+    // Carries much further than a brook, so a longer maxDistance and a
+    // gentler rolloff: you hear a fall before you can see where it is.
+    this.fallPanner = this.panner(0, 0, 0, 10, 420, 1.1);
+    this.fallPanner.panningModel = 'HRTF';
+    this._loop(this.noise, 1.0, this.fallFilter);
+    this.fallFilter.connect(this.fallGain);
+    this.fallGain.connect(this.fallPanner);
+    this.fallPanner.connect(this.dry);
+    this.reverbSendFrom(this.fallGain, 0.45);
+
     /* insects and night ------------------------------------------------ */
     this.insectGain = ctx.createGain();
     this.insectGain.gain.value = 0;
@@ -847,14 +867,36 @@ export class Audio {
     if (weather) {
       const rainAmt = weather.precipitation;
       const isSnow = weather.snow > weather.rain;
-      const level = under ? rainAmt * 0.02 : rainAmt * (isSnow ? 0.035 : 0.28) * lerp(1, 0.55, shelter);
+      // Drizzle and a downpour are different sounds, not different volumes:
+      // fine drops are a thin steady hiss up where the ear finds "tsss", big
+      // drops shift the energy down into a broad roar. The gain curve is
+      // deliberately non-linear so drizzle sits well under the wind and heavy
+      // rain arrives with real weight.
+      const heavy = smoothstep(0.15, 0.85, weather.rain);
+      const level = under
+        ? rainAmt * 0.02
+        : Math.pow(rainAmt, 1.3) * (isSnow ? 0.035 : lerp(0.20, 0.36, heavy)) * lerp(1, 0.55, shelter);
       this.rainGain.gain.setTargetAtTime(level, now, 0.4);
       this.rainFilter.frequency.setTargetAtTime(
-        isSnow ? 900 : lerp(2600, 900, shelter), now, 0.5
+        isSnow ? 900 : lerp(lerp(3400, 1400, heavy), 900, shelter), now, 0.5
       );
+      this.rainFilter.Q.setTargetAtTime(lerp(0.6, 0.28, heavy), now, 0.5);
       // Individual drips when you are under cover.
       if (shelter > 0.4 && rainAmt > 0.2 && Math.random() < dt * 7 * rainAmt) {
         this.burst({ freq: 1400 + Math.random() * 2600, q: 6, gain: 0.05, release: 0.10 });
+      }
+      // Big drops land as individual plops in a downpour - on the ground
+      // around you, not in the middle of your head.
+      if (!under && !isSnow && shelter < 0.5 && heavy > 0.4 && Math.random() < dt * 9 * heavy) {
+        const a = Math.random() * 6.283;
+        const d = 1 + Math.random() * 5;
+        const p = this.world.player;
+        this.burst({
+          pos: p ? [p.position.x + Math.cos(a) * d, p.position.y, p.position.z + Math.sin(a) * d] : null,
+          refDist: 1.5, maxDist: 20,
+          freq: 260 + Math.random() * 520, q: 2.5,
+          gain: 0.035 * heavy, attack: 0.002, release: 0.05 + Math.random() * 0.04,
+        });
       }
     }
 
@@ -939,6 +981,22 @@ export class Audio {
         };
       }
       if (bestD < 3) break;
+    }
+
+    // A fall, if there is one within earshot. It is found by the world at a
+    // few hertz rather than probed for here, because it comes straight off
+    // the traced channel rather than out of a terrain search.
+    const fall = w.nearestFall;
+    if (fall) {
+      this.movePanner(this.fallPanner, fall.x, fall.y, fall.z, 0.3);
+      const size = clamp(fall.fall * (0.35 + Math.sqrt(fall.flow) * 0.30), 0, 1.6);
+      const near = clamp(1 - fall.dist / 380, 0, 1);
+      this.fallGain.gain.setTargetAtTime(near * near * size * 0.30 * (under ? 0.4 : 1), now, 0.5);
+      // Close up you hear the individual water hitting the pool; from far off
+      // only the low roar survives the air between you and it.
+      this.fallFilter.frequency.setTargetAtTime(lerp(700, 2400, near), now, 0.6);
+    } else {
+      this.fallGain.gain.setTargetAtTime(0, now, 1.0);
     }
 
     if (!best) {

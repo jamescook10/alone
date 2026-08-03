@@ -26,6 +26,16 @@ export const atmo = {
   uWind: { value: new THREE.Vector2(1, 0) },
   uWindStrength: { value: 0.4 },
   uWetness: { value: 0 },
+  // Rain actually falling on you right now, 0..1 - distinct from uWetness,
+  // which is how soaked the ground is and lingers after the shower has gone.
+  // Drives the ripple agitation on puddles and open water.
+  uRain: { value: 0 },
+  // The surface height of whatever water is nearest the player, or -9999 for
+  // none. Ground below it is underwater, which is how the terrain knows to
+  // put caustics on itself without having to be told its own depth per vertex.
+  uWaterY: { value: -9999 },
+  // How much of the player is in the water, 0..1. Rings spread from them.
+  uWade: { value: 0 },
   // Fresh snowfall lying on top of everything, 0..1, from the weather.
   uSnowAmount: { value: 0 },
   // Sea-level air temperature of the region you are standing in. Everything

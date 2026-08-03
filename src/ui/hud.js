@@ -4,6 +4,7 @@
 import { BIOME_INFO, SETTLEMENT_INFO } from '../world/worldgen.js';
 import { ITEMS } from '../player/inventory.js';
 import { clamp, lerp } from '../core/noise.js';
+import { LensFX } from './lens.js';
 
 const HELP = [
   ['W A S D', 'walk'],
@@ -40,6 +41,7 @@ export class UI {
     this.photo = false;
     this._t = 0;
     this._build();
+    this.lens = new LensFX(world);
   }
 
   _build() {
@@ -264,6 +266,7 @@ export class UI {
 
   showHud(on) {
     this.hud.classList.toggle('on', on);
+    this.hudVisible = on;
   }
 
   /** The quiet line that tells you the mouse is loose. */
@@ -316,6 +319,7 @@ export class UI {
     this._t += dt;
     const w = this.world;
     const p = w.player;
+    this.lens.update(dt);
 
     // Prompt.
     const inter = w.interaction;
