@@ -1037,21 +1037,37 @@ export class WorldGen {
     let seenLake = null;
     let reachedSea = false;
 
-    for (let k = 0; k < RIVER_STEPS; k++) {
-      const bh = this._bh(x, z);
-      // The whole rule, in one line: the surface may fall and may not rise,
-      // and it is never above the ground it is crossing.
-      level = Math.min(level, bh - 0.6);
-      // And it is never much above the valley to either side of it. Without
-      // this a channel crossing the shoulder of a hill keeps a level set
+    // The walk is budgeted by DISTANCE, not by a step count, so the step can
+    // shorten over a cliff without shortening the river. A fixed 100 m step
+    // makes a plunge impossible by construction: the surface is interpolated
+    // between path points, so a sheer thirty-metre drop came out as a
+    // thirty-metre drop spread over a hundred metres - a 17° ramp. Measured
+    // across the whole network, the steepest water surface in the world was
+    // 24°. Nothing about the terrain caused that; the path resolution did.
+    const REACH = RIVER_STEP * RIVER_STEPS;
+    const MAX_ITER = RIVER_STEPS * 3;
+    let travelled = 0;
+    let lastStep = RIVER_STEP;
+
+    for (let k = 0; k < MAX_ITER && travelled < REACH; k++) {
+      // The SURFACE height is taken from the exact field, not the 100 m
+      // tracer lattice. The lattice is right for the gradient - a river
+      // follows the valley, not every hummock - but it smooths a cliff into a
+      // hundred-metre ramp, and a plateau riser is exactly the sharp step a
+      // real waterfall needs. Terracing is applied before `baseH` is taken,
+      // so the risers are in here.
+      const bh = this.baseHeight(x, z);
+      // Where the surface wants to be: never above the ground it is crossing,
+      // and never much above the valley to either side of it. Without the
+      // side term a channel crossing the shoulder of a hill keeps a level set
       // further upstream and reads as a canal running along the hillside -
-      // the ground a hundred metres off to one side being lower than the
-      // water. Water does not do that; it goes to the low ground.
+      // the ground a hundred metres off being lower than the water. Water
+      // does not do that; it goes to the low ground.
+      let want = bh - 0.6;
       if (k > 0) {
         // Two ranges: the near pair catches a gully just off the channel, the
         // far pair catches a whole valley the walk is running beside rather
-        // than in. Only the near one existed at first and the far one is what
-        // stops the long shelf cases.
+        // than in.
         let side = Infinity;
         for (let r = 0; r < 2; r++) {
           const q = r === 0 ? 45 : 130;
@@ -1060,13 +1076,29 @@ export class WorldGen {
           if (a < side) side = a;
           if (b < side) side = b;
         }
-        level = Math.min(level, side + 1.0);
+        want = Math.min(want, side + 1.0);
       }
+      // The surface may fall and may not rise - but it may not fall faster
+      // than water runs downhill either. Letting the side term drop it in one
+      // bite put a 32 m step in the middle of a 100 m segment, which is not a
+      // waterfall, it is a rendering of one drawn as a long ramp. Capping the
+      // rate and then taking SHORT steps while it is still trying to get down
+      // turns the same descent into a cascade of steep little segments,
+      // heading for the low ground the way it should have been all along.
+      // An ABSOLUTE cap, not one scaled by the step: scaled, a 100 m step
+      // permitted a 90 m fall and the limit never bound at all. Seven metres
+      // per step is a plunge when the steps are four metres long and a
+      // staircase when they are a hundred, which is exactly the distinction
+      // wanted - a cliff is resolved, a valley the walk merely strayed above
+      // is climbed down over several steps.
+      const maxFall = 7;
+      level = Math.max(Math.min(level, want), level - maxFall);
+      const descending = want < level - 0.01;
       // How fast it is losing height right now. A river dropping faster than
       // about a metre in eight is white water, and faster than one in three
       // is a fall - which the surface mesh gets for nothing, because its own
       // vertices are that steep.
-      const dropRate = k === 0 ? 0 : (prevH - bh) / RIVER_STEP;
+      const dropRate = k === 0 ? 0 : (prevH - bh) / lastStep;
       prevH = bh;
 
       // A river surface cannot be below the sea it drains into. On a steep
@@ -1082,8 +1114,10 @@ export class WorldGen {
       pfl.push(flow);
       // White water only counts on a channel that is still above the sea.
       pfa.push(bh > SEA_LEVEL + 1 ? saturate((dropRate - 0.12) / 0.23) : 0);
-      // Discharge grows downstream because the catchment feeding it does.
-      flow += 0.09 * (RIVER_STEP / 100);
+      // Discharge grows with the DISTANCE come, not with the number of path
+      // points - otherwise a river that crossed a cliff would arrive at the
+      // sea carrying three times the water of one that did not.
+      flow += 0.09 * (lastStep / 100);
 
       if (bh < SEA_LEVEL + 0.6) {
         // The sea. Nothing downstream of here belongs to the river.
@@ -1170,8 +1204,28 @@ export class WorldGen {
         dz /= dl;
       }
 
-      x += dx * RIVER_STEP;
-      z += dz * RIVER_STEP;
+      // Short steps where the ground falls away, so a knickpoint is resolved
+      // as a plunge instead of averaged into a ramp. The step is refined by
+      // looking at where it would LAND rather than at the wide gradient,
+      // which spans 340 m and cannot see a cliff at all. Three halvings take
+      // 100 m down to 4, and at a 4 m step a thirty-metre riser is a sheer
+      // face the water mesh - sampled every 4 m on a near chunk - can show.
+      let stepLen = RIVER_STEP;
+      if (descending) {
+        // Still above where it needs to get to: keep the steps short so the
+        // drop is resolved rather than averaged.
+        stepLen = RIVER_STEP * 0.12;
+      } else {
+        for (let r = 0; r < 3; r++) {
+          const nh = this.baseHeight(x + dx * stepLen, z + dz * stepLen);
+          if ((bh - nh) / stepLen < 0.22) break;
+          stepLen *= 0.34;
+        }
+      }
+      x += dx * stepLen;
+      z += dz * stepLen;
+      travelled += stepLen;
+      lastStep = stepLen;
     }
 
     if (px.length < 3) return null;
@@ -1185,6 +1239,19 @@ export class WorldGen {
     for (let k = 0; k < np; k++) {
       w[k] = channelWidth(pfl[k]);
       dep[k] = channelDepth(pfl[k]);
+    }
+    // Plunge pools. Falling water digs out the bed it lands on, and the pool
+    // at the foot of a fall is the deepest part of most rivers. Look back a
+    // few points for a drop and deepen accordingly, fading downstream.
+    for (let k = 1; k < np; k++) {
+      let pool = 0;
+      for (let j = Math.max(0, k - 4); j < k; j++) {
+        pool = Math.max(pool, pfa[j] * (1 - (k - j) / 5));
+      }
+      if (pool > 0.01) {
+        dep[k] *= 1 + pool * 1.6;
+        w[k] *= 1 + pool * 0.35;
+      }
     }
 
     return {
@@ -1534,8 +1601,12 @@ export class WorldGen {
       const vw = Math.max(W * 4.6, 42);
       const bank = 1 - smoothstep(W * 1.1, vw, d);
       if (bank > 0.002) {
-        h = lerp(h, baseH, bank * 0.85);
-        h = lerp(h, Math.min(h, lvl + 1.6), bank * 0.8);
+        // At a fall the point is the cliff, so the alluvium smoothing backs
+        // off: flattening the valley floor across a knickpoint is exactly
+        // what would round the drop away again.
+        const soft = bank * 0.85 * (1 - TMPR.fall * 0.9);
+        h = lerp(h, baseH, soft);
+        h = lerp(h, Math.min(h, lvl + 1.6), bank * 0.8 * (1 - TMPR.fall * 0.75));
       }
       // Then the channel itself, cut to the bed with a rounded profile so the
       // bottom is a trough rather than a slot.

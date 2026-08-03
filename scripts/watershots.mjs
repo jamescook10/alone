@@ -134,8 +134,14 @@ await shot('water-river', () => {
   }
   if (!best) return { fail: 'no river' };
   const fd = wg.flowDir(best.x, best.z, [0, 0]);
-  const off = best.w + 9;
-  const px = best.x + fd[1] * off, pz = best.z - fd[0] * off;
+  // Walk out from the channel until the ground is genuinely above the water:
+  // a fixed offset put the camera in the river once the channels got wider.
+  let px = best.x, pz = best.z;
+  for (let off = best.w + 4; off < best.w + 60; off += 2) {
+    const cx = best.x + fd[1] * off, cz = best.z - fd[0] * off;
+    const wl = wg.sample(cx, cz, {}).waterLevel;
+    if (wg.height(cx, cz) > (wl === -Infinity ? -999 : wl) + 1.2) { px = cx; pz = cz; break; }
+  }
   p.position.set(px, wg.height(px, pz) + 1.7, pz);
   p.velocity.set(0, 0, 0);
   p.yaw = Math.atan2(-fd[0], -fd[1]);
@@ -147,47 +153,61 @@ await shot('water-river', () => {
   return { river: [best.x | 0, best.z | 0], halfWidth: +best.w.toFixed(1), flow: +bestQ.toFixed(1) };
 });
 
-// 3. The steepest cascade around, looking back up the chute from below.
+// 3. The biggest waterfall around, framed from the plunge pool.
 await shot('water-fall', () => {
   const g = window.__game; const w = g.world; const wg = w.wg; const p = w.player;
-  // Walk the traced paths rather than fallsNear(): the camera has to be put
-  // on the channel a few points DOWNSTREAM of the drop, and stepping along a
-  // straight tangent from the fall walks straight out of a six-metre channel.
+  // A single segment can only drop seven metres - the trace caps it so a
+  // stray level correction cannot punch a cliff into flat country - so a tall
+  // fall is a RUN of consecutive steep segments. Scoring one point at a time
+  // therefore finds the steepest inch and misses the actual waterfall.
   let best = null;
   for (let t = 0; t < 2; t++) {
     const C = [3000, 700][t];
-    const ci = Math.floor(p.position.x / C), cj = Math.floor(p.position.z / C);
-    for (let i = -5; i <= 5; i++) for (let j = -5; j <= 5; j++) {
-      const path = wg.riverCell(ci + i, cj + j, t);
+    const R = t === 0 ? 6 : 14;
+    for (let i = -R; i <= R; i++) for (let j = -R; j <= R; j++) {
+      const path = wg.riverCell(i, j, t);
       if (!path) continue;
-      for (let k = 2; k < path.n - 4; k++) {
-        if (path.level[k] <= 1) continue;
-        const score = path.fall[k] * Math.sqrt(path.flow[k]);
-        if (!best || score > best.score) best = { path, k, score };
+      let k = 1;
+      while (k < path.n) {
+        const grade = (a) => {
+          const d = path.level[a - 1] - path.level[a];
+          const r = Math.hypot(path.x[a] - path.x[a - 1], path.z[a] - path.z[a - 1]);
+          return r < 0.5 ? 0 : d / r;
+        };
+        if (grade(k) < 0.35 || path.level[k] <= 1) { k++; continue; }
+        const k0 = k;
+        while (k < path.n && grade(k) >= 0.35) k++;
+        const drop = path.level[k0 - 1] - path.level[k - 1];
+        const score = drop * Math.sqrt(path.flow[k0]);
+        if (!best || score > best.score) best = { path, k0, k1: k - 1, drop, score };
+        k++;
       }
     }
   }
   if (!best) return { fail: 'no falls' };
-  const { path, k } = best;
-  // Three points below the drop, off to one side of the channel.
-  const kk = Math.min(path.n - 1, k + 3);
-  const ax = path.x[kk], az = path.z[kk];
-  const tx = path.x[kk] - path.x[kk - 1], tz = path.z[kk] - path.z[kk - 1];
-  const tl = Math.hypot(tx, tz) || 1;
-  const off = path.w[kk] + 7;
-  const px = ax + (tz / tl) * off, pz = az - (tx / tl) * off;
-  p.position.set(px, Math.max(wg.height(px, pz), path.level[kk]) + 1.7, pz);
+  const { path, k0, k1 } = best;
+  const lipX = path.x[k0 - 1], lipZ = path.z[k0 - 1], lipY = path.level[k0 - 1];
+  const baseX = path.x[k1], baseZ = path.z[k1], baseY = path.level[k1];
+  // Stand back from the foot of the fall along the direction it came FROM,
+  // far enough that the whole drop fits, and look up at the lip.
+  let ux = baseX - lipX, uz = baseZ - lipZ;
+  const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+  const back = Math.max(22, best.drop * 1.9);
+  const px = baseX + ux * back, pz = baseZ + uz * back;
+  const eye = Math.max(wg.height(px, pz), baseY) + 1.7;
+  p.position.set(px, eye - 1.7 + 0.0, pz);
+  p.position.y = Math.max(wg.height(px, pz), baseY - 1) ;
   p.velocity.set(0, 0, 0);
-  // Look back up at the drop.
-  p.yaw = Math.atan2(-(path.x[k] - px), -(path.z[k] - pz));
-  p.pitch = 0.10;
+  p.yaw = Math.atan2(-(lipX - px), -(lipZ - pz));
+  p.pitch = Math.atan2((lipY - (p.position.y + 1.7)) * 0.7, Math.hypot(lipX - px, lipZ - pz));
   w.weather.force('clear');
   w.sky.time = 12 / 24;
   w.terrain.update(p.position, true);
   for (let i = 0; i < 400; i++) w.update(0.033);
   return {
-    at: [ax | 0, az | 0], grade: +path.fall[k].toFixed(2),
-    drop: +(path.level[k - 1] - path.level[k]).toFixed(1), flow: +path.flow[k].toFixed(1),
+    lip: [lipX | 0, lipZ | 0], drop: +best.drop.toFixed(1),
+    segments: k1 - k0 + 1, flow: +path.flow[k0].toFixed(1),
+    run: +Math.hypot(baseX - lipX, baseZ - lipZ).toFixed(1),
   };
 });
 
